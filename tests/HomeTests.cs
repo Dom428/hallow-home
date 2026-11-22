@@ -36,16 +36,35 @@ namespace HallowHome.Tests
             Environment.SetEnvironmentVariable("HALLOW_HOME_TESTDIR", Dir);
             Environment.SetEnvironmentVariable("HALLOW_HOME_HEADLESS", "1");   // the in-process app (camera grid test): no tray icon, no windows shown
             Directory.CreateDirectory(Dir);
+            // 5-minute kill timeout: a hung test (a pipe that never answers, a socket that never closes) can't hang the build
+            var watchdog = new Thread(() => { Thread.Sleep(TimeSpan.FromMinutes(5)); Console.WriteLine("FAIL the tests took longer than 5 minutes - killed"); foreach (var p in Children) try { if (!p.HasExited) p.Kill(); } catch { } try { if (Directory.Exists(Dir)) Directory.Delete(Dir, true); } catch { } Environment.Exit(3); }) { IsBackground = true };
+            watchdog.Start();
             var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             try
             {
-                Parsing(); MappingTests(); Overrides(); Readers(); JamTests(); RuleTests(); IntakeTests(); DeskTests(); AutomationTests(); SecretTests(); LockTests(); MjpegTests(); ModeTests(); Misc();
+                Parsing(); PortionTests(); MappingTests(); Overrides(); Readers(); JamTests(); RuleTests(); IntakeTests(); DeskTests(); AutomationTests(); SecretTests(); LockTests(); MjpegTests(); ModeTests(); Misc();
                 using (var ha = new FakeHa()) { ClientTests(ha); SenderTests(); GridTest(app, ha); LiveViewTest(app, ha); PipeAndApp(ha); }
             }
             catch (Exception e) { fail++; Console.WriteLine("FAIL exception: " + e); }
             try { if (Directory.Exists(Dir)) Directory.Delete(Dir, true); } catch { }
             Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail == 0 ? 0 : 1;
+        }
+        static readonly List<Process> Children = new List<Process>();
+        // 1.1: Feed now's range (status.json "minPortions" / "maxPortions"): Settings' limit narrowed by the feeder's own portion entity
+        static void PortionTests()
+        {
+            var r = Controller.PortionRange(null, 6); Ok(r[0] == 1 && r[1] == 1, "no portion entity: 1 to 1");
+            r = Controller.PortionRange(E("number.f_manual_feed_quantity", "1", "q", "min", 1, "max", 12, "step", 1), 6); Ok(r[0] == 1 && r[1] == 6, "number max 12, Settings 6: 1 to 6");
+            r = Controller.PortionRange(E("number.f_manual_feed_quantity", "1", "q", "min", 1.0, "max", 4.0), 6); Ok(r[0] == 1 && r[1] == 4, "number max 4 (as a double): 1 to 4");
+            r = Controller.PortionRange(E("number.f_manual_feed_quantity", "2", "q", "min", 2, "max", 10), 6); Ok(r[0] == 2 && r[1] == 6, "number min 2: 2 to 6");
+            r = Controller.PortionRange(E("number.f_manual_feed_quantity", "1", "q"), 5); Ok(r[0] == 1 && r[1] == 5, "number without min / max: Settings decide, 1 to 5");
+            r = Controller.PortionRange(E("select.f_portions", "1", "p", "options", new object[] { "1", "2", "3" }), 6); Ok(r[0] == 1 && r[1] == 3, "select with options 1-3: 1 to 3");
+            r = Controller.PortionRange(E("select.f_portions", "1", "p", "options", new object[] { "1", "2", "3", "4", "5", "6", "7", "8" }), 6); Ok(r[0] == 1 && r[1] == 6, "select with options 1-8, Settings 6: 1 to 6");
+            r = Controller.PortionRange(E("select.f_portions", "small", "p", "options", new object[] { "small", "large" }), 6); Ok(r[0] == 1 && r[1] == 6, "select with words only: Settings decide");
+            r = Controller.PortionRange(E("number.f_manual_feed_quantity", "1", "q", "min", 9, "max", 12), 6); Ok(r[0] == 6 && r[1] == 6, "min above Settings' limit: never more than the limit");
+            var json = Family.Json(new Dictionary<string, object> { { "maxPortions", 6 }, { "gramsPerPortion", 10.0 } });
+            Ok(json == "{\"maxPortions\":6,\"gramsPerPortion\":10}", "status numbers are plain JSON numbers: " + json);
         }
         static HomeSettings NewSettings() { var s = new HomeSettings(); s.Fix(); return s; }
         static Dictionary<string, Entity> ById(IEnumerable<Entity> l) { return l.ToDictionary(e => e.Id); }
@@ -479,7 +498,7 @@ namespace HallowHome.Tests
             var dir = Path.Combine(Dir, "app"); Directory.CreateDirectory(dir);
             var psi = new ProcessStartInfo(exe, "--tray") { UseShellExecute = false, CreateNoWindow = true };
             psi.EnvironmentVariables["HALLOW_HOME_TESTDIR"] = dir; psi.EnvironmentVariables["HALLOW_HOME_HEADLESS"] = "1";
-            var app = Process.Start(psi);
+            var app = Process.Start(psi); Children.Add(app);
             try
             {
                 string r = null; for (int i = 0; i < 40 && (r == null || !r.StartsWith("ok")); i++) { Thread.Sleep(250); r = Cmd(exe, dir, "ping"); }
@@ -501,6 +520,18 @@ namespace HallowHome.Tests
                 r = Cmd(exe, dir, "feed 2");
                 Ok(r.StartsWith("error not fed: add \"confirm\"") && r.Contains("about 20 g"), "feed 2 without confirm: not fed (" + r + ")");
                 Thread.Sleep(600); lock (ha.Calls) Ok(ha.Calls.Count == calls, "...and no service was called");
+                // 1.1: the feeder's range in status (Remote's phone page offers exactly this)
+                r = Cmd(exe, dir, "status");
+                Ok(r.Contains("\"minPortions\":1") && r.Contains("\"maxPortions\":6") && r.Contains("\"gramsPerPortion\":10") && r.Contains("\"portionSetting\":true"), "status: feeder min / max portions, grams per portion, portion setting");
+                Ok(sj.Contains("\"maxPortions\":6") && sj.Contains("\"gramsPerPortion\":10"), "status.json has them too");
+                ha.Set("number.granary_smart_camera_feeder_manual_feed_quantity", "1", "max", 3);
+                r = Until(exe, dir, "\"maxPortions\":3");
+                Ok(r.Contains("\"maxPortions\":3"), "the feeder's own entity allows only 3: status says 3 (live)");
+                lock (ha.Calls) calls = ha.Calls.Count;
+                r = Cmd(exe, dir, "feed 4 confirm"); Ok(r.StartsWith("error Pick 1 to 3"), "feed 4 confirm is refused: " + r);
+                Thread.Sleep(600); lock (ha.Calls) Ok(ha.Calls.Count == calls, "...and no service was called");
+                ha.Set("number.granary_smart_camera_feeder_manual_feed_quantity", "1", "max", 12);
+                Ok(Until(exe, dir, "\"maxPortions\":6").Contains("\"maxPortions\":6"), "back to 12 on the feeder: 6 (the Settings limit)");
                 Ok(Cmd(exe, dir, "feed 9 confirm").StartsWith("error Pick 1 to 6") && Cmd(exe, dir, "feed lots confirm").StartsWith("error use:"), "too many portions / junk refused");
                 var meals = ha.State("sensor.granary_smart_camera_feeder_today_feeding_times");
                 Ok(Cmd(exe, dir, "feed 2 confirm") == "ok feeding 2", "feed 2 confirm");

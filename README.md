@@ -93,8 +93,12 @@ Windows 11; Hallow Home never downloads it).
 - Pipe `HallowFamily.Home.<user>` / `HallowHome.exe --cmd <line>`: `ping`, `status` (counts and alert flags only - no camera URLs,
   addresses or tokens), `feed <portions> confirm` (without `confirm` nothing is dispensed), `away on|off`, `open [page]`, `menu`,
   `invoke <id>`, `quit`.
-- `%APPDATA%\HallowHome\status.json` for apps that only read; Hallow Hub's tray lists it (generic host). A phone view through
-  Hallow Remote comes later - the pipe and status are ready for it.
+- `%APPDATA%\HallowHome\status.json` for apps that only read; Hallow Hub's tray lists it (generic host), Hallow Remote shows it on
+  the phone.
+- Since 1.1 the `feeder` block also carries the **Feed now range**: `minPortions`, `maxPortions`, `gramsPerPortion` and
+  `portionSetting` (whether a portion entity is mapped). `maxPortions` is Settings' "at most" limit narrowed to what the feeder's own
+  portion entity accepts (a number's min / max, a select's numeric options); without a portion entity it's 1. The PC's Feed now
+  dialog and `feed <n> confirm` use the same range, so the phone can offer exactly the choice the PC would.
 
 ## Building and testing
 
@@ -102,6 +106,6 @@ Windows 11; Hallow Home never downloads it).
 against a **fake Home Assistant** (`tests\FakeHa.cs`): REST, the WebSocket API with `state_changed`, service calls with the effects
 a feeder would have, an MJPEG camera made of generated frames, and made-up entities modelled on the community Petlibro and Wyze
 integrations (feeder, fountain, cameras, an unavailable Lock Bolt). They cover the mapping and overrides, Feed now only after a
-confirm, every alert rule (the jam and the low-intake check on synthetic data), de-duplication and quiet hours, the camera grid
+confirm and its portion range, every alert rule (the jam and the low-intake check on synthetic data), de-duplication and quiet hours, the camera grid
 loading the fake stream, the live view, token encryption and the pipe. `HallowHome.exe --snap <folder>` renders every page in light
 and dark with made-up devices. Icons: Font Awesome Free (CC BY 4.0). WebView2 SDK: Microsoft (see WebView2-LICENSE.txt).

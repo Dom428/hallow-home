@@ -41,7 +41,9 @@ namespace HallowHome.Tests
         static string Iso(DateTime local) { return local.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.ffffff+00:00", CultureInfo.InvariantCulture); }
         public string State(string id) { lock (states) return states.ContainsKey(id) ? (string)states[id]["state"] : null; }
         // changes an entity and tells every WebSocket subscriber (state_changed), like HA does
-        public void Set(string id, string state)
+        public void Set(string id, string state) { Set(id, state, null, null); }
+        // ...and one attribute too (e.g. a number entity's "max"), like an integration update would
+        public void Set(string id, string state, string attr, object value)
         {
             Dictionary<string, object> old, nu;
             lock (states)
@@ -49,6 +51,7 @@ namespace HallowHome.Tests
                 states.TryGetValue(id, out old);
                 nu = new Dictionary<string, object>(old ?? new Dictionary<string, object> { { "entity_id", id }, { "attributes", new Dictionary<string, object> { { "friendly_name", id } } } });
                 nu["state"] = state; nu["last_changed"] = Iso(DateTime.Now); nu["last_updated"] = Iso(DateTime.Now);
+                if (attr != null) { var a = new Dictionary<string, object>((Dictionary<string, object>)nu["attributes"]); a[attr] = value; nu["attributes"] = a; }
                 states[id] = nu;
             }
             var ev = js.Serialize(new Dictionary<string, object> { { "id", 1 }, { "type", "event" }, { "event", new Dictionary<string, object> {

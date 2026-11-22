@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -18,14 +19,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Home")]
 [assembly: AssemblyProduct("Hallow Home")]
 [assembly: AssemblyDescription("Your smart-home and pet devices through Home Assistant, the Hallow way")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace HallowHome
 {
     public static class Program
     {
-        public const string Version = "1.0";
+        public const string Version = "1.1";
         [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr v);
 
         [STAThread]
@@ -270,7 +271,34 @@ namespace HallowHome
             if (!btn.Available) return "The feeder's Feed now button is unavailable right now (is the feeder online?).";
             if (portions < 1 || portions > S.MaxPortions) return "Pick 1 to " + S.MaxPortions + " portions.";
             if (portions > 1 && Map.Get("feeder.portion") == null) return "Only 1 portion: no portion setting was found for the feeder (map \"Portions for Feed now\" on the Devices page).";
+            int lo = MinFeedPortions, hi = MaxFeedPortions;
+            if (portions < lo || portions > hi) return "Pick " + lo + " to " + hi + " portions (the feeder's own limit).";
             return null;
+        }
+        // Feed now's range, for the dialog, the pipe and status.json (so Remote's phone page offers the same choice):
+        // 1 .. Settings' "at most" limit, narrowed to what the feeder's own portion entity accepts (a number's min / max, a select's
+        // numeric options). Without a portion entity it's 1 .. 1 - the feeder's button alone dispenses one portion.
+        public int MaxFeedPortions { get { var r = PortionRange(Map.Get("feeder.portion"), S.MaxPortions); return r[1]; } }
+        public int MinFeedPortions { get { var r = PortionRange(Map.Get("feeder.portion"), S.MaxPortions); return r[0]; } }
+        public static int[] PortionRange(Entity por, int settingsMax)
+        {
+            int hi = Math.Max(1, settingsMax), lo = 1;
+            if (por == null) return new[] { 1, 1 };
+            double d;
+            if (por.Domain == "number")
+            {
+                if (double.TryParse(por.AttrS("max"), NumberStyles.Float, CultureInfo.InvariantCulture, out d) && d >= 1) hi = Math.Min(hi, (int)Math.Floor(d));
+                if (double.TryParse(por.AttrS("min"), NumberStyles.Float, CultureInfo.InvariantCulture, out d) && d > 1) lo = (int)Math.Ceiling(d);
+            }
+            else if (por.Domain == "select")
+            {
+                object o; var nums = new List<int>();
+                if (por.Attr.TryGetValue("options", out o) && o is System.Collections.IEnumerable && !(o is string))
+                    foreach (var x in (System.Collections.IEnumerable)o) { int n; if (x != null && int.TryParse(Convert.ToString(x, CultureInfo.InvariantCulture).Trim(), out n) && n >= 1) nums.Add(n); }
+                if (nums.Count > 0) { lo = nums.Min(); var ok = nums.Where(n => n <= hi).ToList(); hi = ok.Count > 0 ? ok.Max() : lo; }
+            }
+            if (lo > hi) lo = hi;
+            return new[] { lo, hi };
         }
         public string Feed(int portions, bool confirmed, Action<string> done)
         {
@@ -498,7 +526,9 @@ namespace HallowHome
                 { "configured", Configured }, { "connected", Connected }, { "live", Live }, { "entities", Entities.Count },
                 { "cameras", Map.Cameras.Count }, { "camerasOnline", Map.Cameras.Count(c => c.Available) } };
             d["feeder"] = !Feeder.Present ? null : new Dictionary<string, object> { { "online", Feeder.Online }, { "nextFeed", Feeder.Next == null ? null : Family.Time(Feeder.Next.Value) },
-                { "todayMeals", Feeder.TodayMeals }, { "todayGrams", Feeder.TodayGrams }, { "foodLow", Feeder.FoodLow }, { "canFeed", Feeder.CanFeed } };
+                { "todayMeals", Feeder.TodayMeals }, { "todayGrams", Feeder.TodayGrams }, { "foodLow", Feeder.FoodLow }, { "canFeed", Feeder.CanFeed },
+                // 1.1: the Feed now range, so the phone offers the same choice as the PC's dialog
+                { "minPortions", MinFeedPortions }, { "maxPortions", MaxFeedPortions }, { "gramsPerPortion", S.GramsPerPortion }, { "portionSetting", Feeder.PortionEntity } };
             d["fountain"] = !Fountain.Present ? null : new Dictionary<string, object> { { "online", Fountain.Online }, { "waterLow", Fountain.WaterLow }, { "waterPct", Fountain.WaterPct },
                 { "pumpOn", Fountain.PumpOn }, { "filterDue", Fountain.FilterDue }, { "cleaningDue", Fountain.CleaningDue }, { "intakeToday", Fountain.IntakeToday },
                 { "intakeAvg7", Fountain.IntakeAvg == null ? null : (object)Math.Round(Fountain.IntakeAvg.Value, 2) }, { "unit", Fountain.Unit } };

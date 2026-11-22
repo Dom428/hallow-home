@@ -50,7 +50,7 @@ namespace HallowHome
         public static Window FeedWindow(Controller c, Action<int> done)
         {
             var w = Make("Hallow Home", 460); var sp = Body(w);
-            int max = c.Map.Get("feeder.portion") != null ? c.S.MaxPortions : 1; int pick = 1;
+            int max = c.MaxFeedPortions, min = c.MinFeedPortions; int pick = min;   // the same range the pipe and status.json give
             sp.Children.Add(Ui.T("Feed now?", 15, true, null, 6));
             sp.Children.Add(Ui.Muted("The feeder dispenses right away. One portion is about " + Read.Num(c.S.GramsPerPortion) + " g (change it in Settings if your feeder is set differently)." + (c.Feeder.Next != null ? " Next scheduled meal: " + Fmt.Clock(c.Feeder.Next, c.Now()) + "." : ""), 12.5, 10));
             var chips = new WrapPanel(); var grams = Ui.Muted("", 12.5, 0);
@@ -61,16 +61,16 @@ namespace HallowHome
                 grams.Text = pick + " portion" + (pick == 1 ? "" : "s") + " ≈ " + Read.Num(pick * c.S.GramsPerPortion) + " g";
                 if (ok != null) ok.Content = "Feed " + pick + " portion" + (pick == 1 ? "" : "s");
             };
-            for (int i = 1; i <= max; i++)
+            for (int i = min; i <= max; i++)
             {
                 var n = i; var t = new System.Windows.Controls.Primitives.ToggleButton { Content = i.ToString(), Tag = i, Style = Ui.S("Chip"), Margin = new Thickness(0, 0, 6, 6), MinWidth = 38 };
                 t.Click += (s, e) => { pick = n; refresh(); }; chips.Children.Add(t);
             }
             sp.Children.Add(chips); sp.Children.Add(grams);
-            if (max == 1) sp.Children.Add(Ui.Muted("Only one portion at a time: no portion setting was found for the feeder (Devices page).", 11.5, 0));
+            if (max == 1 && c.Map.Get("feeder.portion") == null) sp.Children.Add(Ui.Muted("Only one portion at a time: no portion setting was found for the feeder (Devices page).", 11.5, 0));
             var row = Buttons(sp); int answer = 0;
             row.Children.Add(Ui.Btn("Cancel", () => w.Close()));
-            ok = Ui.Btn("Feed 1 portion", () => { answer = pick; w.Close(); }, true); ok.Margin = new Thickness(0); ok.MinWidth = 120; row.Children.Add(ok);
+            ok = Ui.Btn("Feed " + pick + " portion" + (pick == 1 ? "" : "s"), () => { answer = pick; w.Close(); }, true); ok.Margin = new Thickness(0); ok.MinWidth = 120; row.Children.Add(ok);
             refresh();
             w.Closed += (s, e) => { if (done != null) done(answer); };
             w.Loaded += (s, e) => ((Button)row.Children[0]).Focus();
