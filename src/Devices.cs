@@ -125,7 +125,7 @@ namespace HallowHome
             if (e == null || !e.Available) return;
             if (e.Domain == "binary_sensor") { low = e.On; text = e.On ? "Low" : "OK"; return; }
             var n = e.Num;
-            if (n != null && IsPercent(e)) { pct = Math.Max(0, Math.Min(100, n.Value)); low = pct < lowPct; text = Math.Round(pct.Value) + " %"; return; }
+            if (n != null && IsPercent(e)) { pct = Math.Max(0, Math.Min(100, n.Value)); low = pct < lowPct; text = Math.Round(pct.Value) + "%"; return; }
             var s = e.State.ToLowerInvariant();
             if (n != null) { text = Num(n.Value) + (e.Unit != null ? " " + e.Unit : ""); return; }
             low = LowWords.IsMatch(s) && !s.Contains("not low"); text = Nice(e.State);
@@ -138,7 +138,7 @@ namespace HallowHome
             if (e.Domain == "binary_sensor") { due = e.On; text = e.On ? "Due now" : "OK"; return; }
             var n = e.Num;
             if (n != null && IsDays(e)) { due = n.Value <= days; text = n.Value <= 0 ? "Due now" : Num(n.Value) + (n.Value == 1 ? " day left" : " days left"); return; }
-            if (n != null && e.Unit == "%") { due = n.Value <= 5; text = Math.Round(n.Value) + " % left"; return; }
+            if (n != null && e.Unit == "%") { due = n.Value <= 5; text = Math.Round(n.Value) + "% left"; return; }
             if (n != null) { text = Num(n.Value) + (e.Unit != null ? " " + e.Unit : ""); return; }
             due = DueWords.IsMatch(e.State.ToLowerInvariant()); text = Nice(e.State);
         }
@@ -191,7 +191,7 @@ namespace HallowHome
             double? pct; bool low; string text; Read.Level(m.Get("feeder.food"), s.FoodLowPct, out pct, out low, out text); f.FoodPct = pct; f.FoodLow = low; f.FoodText = text;
             var jam = m.Get("feeder.jam"); f.Jam = jam != null && jam.Available && (jam.Domain == "binary_sensor" ? jam.On : Regex.IsMatch(jam.State.ToLowerInvariant(), "jam|block|stuck|error|problem|fault") && !Regex.IsMatch(jam.State.ToLowerInvariant(), "^(no|none|ok|normal)"));
             var de = m.Get("feeder.desiccant"); if (de != null && de.Available) { bool due; string dt; Read.Due(de, 3, out due, out dt); f.Desiccant = dt; }
-            var b = m.Get("feeder.battery"); if (b != null && b.Available) f.Battery = b.Num != null ? Math.Round(b.Num.Value) + " %" : Read.Nice(b.State);
+            var b = m.Get("feeder.battery"); if (b != null && b.Available) f.Battery = b.Num != null ? Math.Round(b.Num.Value) + "%" : Read.Nice(b.State);
             var w = m.Get("feeder.wifi"); if (w != null && w.Available) f.Wifi = w.Num != null ? Read.Num(w.Num.Value) + (w.Unit != null ? " " + w.Unit : "") : Read.Nice(w.State);
             var snd = m.Get("feeder.sound"); if (snd != null && snd.Available) f.Muted = snd.Words.Contains("mute") ? snd.On : !snd.On;
             f.Camera = m.Get("feeder.camera");
@@ -225,7 +225,7 @@ namespace HallowHome
         public List<string> Explain(bool intakeLow)
         {
             var l = new List<string>();
-            if (WaterLow) l.Add("The water is low" + (WaterPct != null ? " (" + Math.Round(WaterPct.Value) + " %)" : "") + " - top up the tank so the pump doesn't run dry.");
+            if (WaterLow) l.Add("The water is low" + (WaterPct != null ? " (" + Math.Round(WaterPct.Value) + "%)" : "") + " - top up the tank so the pump doesn't run dry.");
             if (PumpOn == false) l.Add("The pump isn't running - check the tank sits properly on the dock and has water; a dry or blocked pump stops on its own.");
             if (FilterDue) l.Add("The filter is due for a change (" + (FilterText ?? "now") + ") - an old filter lets hair and scale through and cats may drink less.");
             if (CleaningDue) l.Add("It's time to clean the fountain (" + (CleaningText ?? "now") + ") - rinse the tank and the pump; slime builds up in a week or two.");

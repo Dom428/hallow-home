@@ -152,7 +152,7 @@ namespace HallowHome
             if (today == null || avg == null || avg.Value <= 0 || now.Hour < 15) return false;
             var expected = avg.Value * Math.Min(1.0, now.TimeOfDay.TotalMinutes / (24 * 60.0) * 1.15);   // cats drink a little more in the day
             if (today.Value >= expected * pct / 100.0) return false;
-            why = "By " + now.ToString("HH:mm") + " your cat has drunk " + Read.Num(Math.Round(today.Value, 2)) + " " + (unit ?? "") + ", about " + Math.Round(100 * today.Value / expected) + " % of what's usual by this time (7-day average " + Read.Num(Math.Round(avg.Value, 2)) + " " + (unit ?? "") + " a day).";
+            why = "By " + now.ToString("HH:mm") + " your cat has drunk " + Read.Num(Math.Round(today.Value, 2)) + " " + (unit ?? "") + ", about " + Math.Round(100 * today.Value / expected) + "% of what's usual by this time (7-day average " + Read.Num(Math.Round(avg.Value, 2)) + " " + (unit ?? "") + " a day).";
             return true;
         }
     }

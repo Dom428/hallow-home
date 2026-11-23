@@ -515,7 +515,7 @@ namespace HallowHome
                 var sw = Ui.Switch(r[1] + " - " + r[2], c.S.RuleOn(id) && (id != "motion-away" || c.S.MotionAlerts), on => { if (on) c.S.RulesOff.Remove(id); else if (!c.S.RulesOff.Contains(id)) c.S.RulesOff.Add(id); if (id == "motion-away") c.S.MotionAlerts = on; c.S.Save(); c.Recompute(); });
                 sp.Children.Add(sw);
             }
-            sp.Children.Add(Ui.Muted("Thresholds: food and water low under " + c.S.FoodLowPct + " / " + c.S.WaterLowPct + " %, pump stopped for " + c.S.PumpOffMinutes + " min, filter / cleaning with " + c.S.FilterDueDays + " days left, a camera offline for " + c.S.CameraOfflineMinutes + " min, a missed meal checked " + c.S.JamGraceMinutes + " min after its time, intake under " + c.S.IntakeLowPct + " % of usual (after 15:00, once 3 days are known). \"Away\" = everyone's person entity in Home Assistant is away, or \"I'm away\" below. Hallow Places can tell Hallow Home later.", 11.5, 4));
+            sp.Children.Add(Ui.Muted("Thresholds: food and water low under " + c.S.FoodLowPct + " / " + c.S.WaterLowPct + "%, pump stopped for " + c.S.PumpOffMinutes + " min, filter / cleaning with " + c.S.FilterDueDays + " days left, a camera offline for " + c.S.CameraOfflineMinutes + " min, a missed meal checked " + c.S.JamGraceMinutes + " min after its time, intake under " + c.S.IntakeLowPct + "% of usual (after 15:00, once 3 days are known). \"Away\" = everyone's person entity in Home Assistant is away, or \"I'm away\" below. Hallow Places can tell Hallow Home later.", 11.5, 4));
             sp.Children.Add(Ui.Switch("I'm away (for motion alerts and \"everyone's away\" automations)", c.S.Away, on => c.SetAway(on)));
             return Scroll(sp);
         }

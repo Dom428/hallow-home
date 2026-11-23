@@ -3,6 +3,9 @@ HALLOW HOME - your smart-home and pet devices through Home Assistant
 One private app for a Petlibro feeder and fountain, Wyze cameras and an honest Wyze Lock Bolt card,
 with smarter alerts. Home Assistant runs on your NAS and is NOT included - see NAS-SETUP.md.
 
+WHAT'S NEW IN 1.1.1
+- Percentages read 45% instead of 45 %.
+
 WHAT'S NEW IN 1.1
 - Hallow Remote and Hub can now offer the right Feed now choice: the status other apps read includes the
   feeder's portion range (1 to the most the feeder and your Settings allow) and grams per portion.

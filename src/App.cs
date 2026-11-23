@@ -19,14 +19,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Home")]
 [assembly: AssemblyProduct("Hallow Home")]
 [assembly: AssemblyDescription("Your smart-home and pet devices through Home Assistant, the Hallow way")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.1.1.0")]
+[assembly: AssemblyFileVersion("1.1.1.0")]
 
 namespace HallowHome
 {
     public static class Program
     {
-        public const string Version = "1.1";
+        public const string Version = "1.1.1";
         [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr v);
 
         [STAThread]

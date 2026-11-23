@@ -127,7 +127,7 @@ namespace HallowHome.Tests
             Ok(m2.Get("fountain.water").Id == "binary_sensor.water_fountain_water_shortage" && m2.Get("fountain.pump").Id == "switch.water_fountain_pump" && m2.Get("fountain.intake").Id == "sensor.water_fountain_daily_water_intake" && m2.Get("fountain.filter").Id == "binary_sensor.water_fountain_filter_replace", "other names: water shortage, pump switch, daily intake, filter replace");
             Ok(!m2.ByRole.Values.Any(e => e.Id == "sensor.kitchen_water_level"), "a kettle's water level isn't the fountain's (needs the fountain's own words)");
             var f2 = FeederView.From(m2, s, DateTime.Today.AddHours(8)); var w2 = FountainView.From(m2, s, null, DateTime.Now);
-            Ok(f2.FoodLow && f2.FoodPct == 15 && f2.Next == DateTime.Today.AddDays(1).AddHours(7), "15 % food is low; \"07:00\" after 07:00 means tomorrow");
+            Ok(f2.FoodLow && f2.FoodPct == 15 && f2.Next == DateTime.Today.AddDays(1).AddHours(7), "15% food is low; \"07:00\" after 07:00 means tomorrow");
             Ok(w2.WaterLow && w2.PumpOn == false && w2.FilterDue && w2.IntakeToday == 120 && w2.Unit == "mL", "water shortage on, pump switch off, filter replace on, intake in mL");
         }
         static void Overrides()
@@ -151,13 +151,13 @@ namespace HallowHome.Tests
         static void Readers()
         {
             double? p; bool low; string t;
-            Read.Level(E("sensor.a_level", "18", "x", "unit_of_measurement", "%"), 20, out p, out low, out t); Ok(p == 18 && low && t == "18 %", "18 % is low");
+            Read.Level(E("sensor.a_level", "18", "x", "unit_of_measurement", "%"), 20, out p, out low, out t); Ok(p == 18 && low && t == "18%", "18% is low");
             Read.Level(E("sensor.a", "Insufficient", "x"), 20, out p, out low, out t); Ok(low && p == null && t == "Insufficient", "\"Insufficient\" is low");
             Read.Level(E("sensor.a", "normal", "x"), 20, out p, out low, out t); Ok(!low && t == "Normal", "\"normal\" isn't");
             Read.Level(E("sensor.a", "unavailable", "x"), 20, out p, out low, out t); Ok(!low && t == null, "unavailable says nothing");
             bool due; Read.Due(E("sensor.f", "1", "x", "unit_of_measurement", "days"), 2, out due, out t); Ok(due && t == "1 day left", "1 day left is due");
             Read.Due(E("sensor.f", "9", "x", "unit_of_measurement", "days"), 2, out due, out t); Ok(!due, "9 days isn't");
-            Read.Due(E("sensor.f", "3", "x", "unit_of_measurement", "%"), 2, out due, out t); Ok(due, "3 % filter life is due");
+            Read.Due(E("sensor.f", "3", "x", "unit_of_measurement", "%"), 2, out due, out t); Ok(due, "3% filter life is due");
             Ok(Read.Running(E("sensor.p", "running", "x")) == true && Read.Running(E("sensor.p", "Stopped", "x")) == false && Read.Running(E("sensor.p", "intermittent", "x")) == true && Read.Running(E("sensor.p", "weird", "x")) == null, "pump words");
         }
 
@@ -547,7 +547,7 @@ namespace HallowHome.Tests
                 Ok(Cmd(exe, dir, "test-quiet off") == "ok" && Cmd(exe, dir, "test-channels hub discord ntfy") == "ok", "quiet hours off for now; alert channels on (test stand-ins)");
                 ha.Set("sensor.dockstream_2_smart_fountain_water_level", "9");
                 r = Until(exe, dir, "\"waterLow\":true");
-                Ok(r.Contains("\"waterLow\":true") && r.Contains("\"water-low\""), "the water drops to 9 %: water low flagged at once (WebSocket)");
+                Ok(r.Contains("\"waterLow\":true") && r.Contains("\"water-low\""), "the water drops to 9%: water low flagged at once (WebSocket)");
                 Ok(Wait(() => Cmd(exe, dir, "test-sent").Contains("ntfy|Fountain water low"), 4000), "sent: " + Cmd(exe, dir, "test-sent"));
                 var sentOnce = Cmd(exe, dir, "test-sent");
                 Ok(Regex.Matches(sentOnce, "discord\\|Fountain water low").Count == 1, "Discord got it once");
