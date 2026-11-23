@@ -24,6 +24,11 @@ namespace HallowHome
             { "Send a test alert", "bell" }, { "Add", "plus" }, { "Use this one", "check" }, { "Automatic", "arrows-rotate" }, { "Open Settings", "gear" },
             { "Open the recordings folder", "folder-open" }, { "Open", "eye" }, { "I am away", "user-group" }, { "I am home", "house" }, { "Pause alerts for 1 hour", "moon" },
             { "Resume alerts", "bell" }, { "Lock", "lock" }, { "Unlock", "lock" },
+            { "Full screen", "expand" }, { "Exit full screen", "compress" }, { "Mute", "volume-xmark" }, { "Unmute", "volume-high" }, { "Copy", "copy" }, { "Copy the repository address", "copy" },
+            { "Test again", "link" }, { "Test the bridge", "link" }, { "Previous", "chevron-left" }, { "Next", "chevron-right" }, { "Skip this step", "chevron-right" }, { "Show this step", "eye" },
+            { "Edit", "pen" }, { "Delete", "trash" }, { "Add a meal", "plus" }, { "Change", "check" }, { "All cameras", "table-cells" }, { "Open setup", "wand-magic-sparkles" },
+            { "Try Demo mode", "flask" }, { "Leave Demo mode", "xmark" }, { "Changed the filter today", "filter" }, { "Cleaned it today", "droplet" }, { "Update the snippet", "arrows-rotate" },
+            { "Open Home Assistant's profile page", "link" }, { "2×2", "table-cells-large" }, { "3×3", "table-cells" },
         };
         static readonly string[][] Prefixes = { new[] { "Update to", "download" }, new[] { "Feed", "bowl-food" }, new[] { "Remove", "xmark" }, new[] { "Turn", "bolt" } };
         public static string ForLabel(string label)

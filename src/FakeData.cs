@@ -38,6 +38,8 @@ namespace HallowHome
                 E("switch." + f + "_sound", "off", F + " Sound", now.AddDays(-9)),
                 E("button." + f + "_manual_feed", "unknown", F + " Manual feed", now.AddDays(-9)),
                 E("number." + f + "_manual_feed_quantity", "1", F + " Manual feed quantity", now.AddDays(-9), "min", 1, "max", 12, "step", 1),
+                E("binary_sensor." + f + "_feeding_schedule", "on", F + " Feeding schedule", now.AddDays(-9), "feed_conv_factor", 1, "schedule", Plans(now)),
+                E("binary_sensor." + f + "_today_s_feeding_schedule", "off", F + " Today's feeding schedule", now.AddDays(-1)),
                 E("camera." + f + "_camera", "idle", F + " Camera", now.AddDays(-1), "access_token", "fake", "entity_picture", "/api/camera_proxy/camera." + f + "_camera?token=fake"),
                 E("sensor." + w + "_today_s_water_intake", "3.52", W + " Today's water intake", now.AddMinutes(-20), "unit_of_measurement", "oz", "state_class", "total_increasing"),
                 E("sensor." + w + "_water_level", "64", W + " Water level", now.AddMinutes(-20), "unit_of_measurement", "%"),
@@ -55,6 +57,22 @@ namespace HallowHome
                 E("person.sam", "home", "Sam", now.AddHours(-5)),
                 E("sun.sun", "below_horizon", "Sun", now.AddHours(-4)),
                 E("sensor.nas_cpu_temperature", "41", "NAS CPU temperature", now.AddMinutes(-1), "unit_of_measurement", "°C", "device_class", "temperature") };
+        }
+        // the feeder's plan, as the Petlibro integration's "Feeding schedule" sensor lists it (07:00 / 12:00 / 18:00, one portion each)
+        public static object[] Plans(DateTime now)
+        {
+            var l = new List<object>();
+            foreach (var p in new[] { new object[] { 101L, "Breakfast", 7 }, new object[] { 102L, "Lunch", 12 }, new object[] { 103L, "Dinner", 18 } })
+                l.Add(Plan((long)p[0], (string)p[1], ((int)p[2]).ToString("00") + ":00", 1, true, new object[] { 1, 2, 3, 4, 5, 6, 7 }, now));
+            return l.ToArray();
+        }
+        public static Dictionary<string, object> Plan(long id, string label, string time, int portions, bool enabled, object[] days, DateTime now)
+        {
+            var t = DateTime.ParseExact(time, "HH:mm", CultureInfo.InvariantCulture).TimeOfDay; int wd = ((int)now.DayOfWeek + 6) % 7 + 1;
+            bool today = days.Length == 0 || Array.IndexOf(days, wd) >= 0 || Array.IndexOf(days, (object)wd) >= 0;
+            foreach (var d in days) if (Convert.ToInt32(d) == wd) today = true;
+            return new Dictionary<string, object> { { "id", id }, { "label", label }, { "time", time }, { "amount_g", portions * 10 }, { "amount_raw", portions }, { "enabled", enabled },
+                { "recurring", days.Length > 0 }, { "repeat_days", days }, { "sound", false }, { "today", today }, { "state", now.TimeOfDay > t ? "dispensed" : "pending" } };
         }
         public static List<Entity> Entities(DateTime now) { var l = new List<Entity>(); foreach (var d in States(now)) l.Add(Entity.From(d)); return l; }
         // a week of water intake (oz) for the 7-day average

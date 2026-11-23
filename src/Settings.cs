@@ -48,8 +48,21 @@ namespace HallowHome
         // cameras
         [DataMember] public string LiveBase;                   // docker-wyze-bridge WebRTC (http://nas:8889) or HLS (http://nas:8888) base - optional
         [DataMember] public string RecordingsFolder;           // where wyze-bridge / HA record, e.g. \\nas\docker\wyze-bridge\recordings
+        // 1.2: docker-wyze-bridge's two players (MediaMTX): WebRTC http://nas:8889 and HLS http://nas:8888 (LiveBase is migrated into them)
+        [DataMember] public string BridgeWebRtc, BridgeHls;
+        [DataMember] public string StreamMode = "auto";        // auto / mjpeg (Home Assistant's camera proxy) / hls / webrtc
+        [DataMember] public int GridSize = 2;                  // the camera grid: 2 = 2x2, 3 = 3x3
+        // 1.2: the setup wizard and Demo mode
+        [DataMember] public List<string> WizardSkipped;        // "ha" / "cameras" / "petlibro"
+        [DataMember] public bool Demo;                         // made-up devices (an in-app stand-in for Home Assistant on localhost)
+        [DataMember] public string NasFolder = "/volume1/docker/wyze-bridge";
+        [DataMember] public bool BridgeRecord;
+        // 1.2: fountain reminders - the integration's filter / cleaning days, or your own interval when it has none (or you prefer it)
+        [DataMember] public bool OwnReminders;
+        [DataMember] public int FilterEveryDays = 30, CleanEveryDays = 14;
+        [DataMember] public string FilterChangedOn, CleanedOn;   // yyyy-MM-dd
         // alerts
-        [DataMember] public List<string> RulesOff;             // alert rules switched off (Alerts.Rules ids)
+        [DataMember] public List<string> RulesOff;            // alert rules switched off (Alerts.Rules ids)
         [DataMember] public bool UseHub = true, UseDiscord, UseNtfy;
         [DataMember] public bool QuietOn = true;
         [DataMember] public string QuietStart = "22:00", QuietEnd = "07:00";
@@ -63,7 +76,7 @@ namespace HallowHome
         [DataMember] public string LastCrashShown;
         [DataMember] public bool TrayHintShown;
 
-        [OnDeserializing] void Defaults(StreamingContext c) { UseHallowIcon = true; UseHallowAccent = true; Look = "follow"; GramsPerPortion = 10; MaxPortions = 6; UseHub = true; QuietOn = true; QuietStart = "22:00"; QuietEnd = "07:00"; FoodLowPct = 20; WaterLowPct = 20; IntakeLowPct = 50; PumpOffMinutes = 30; CameraOfflineMinutes = 5; JamGraceMinutes = 10; FilterDueDays = 2; }
+        [OnDeserializing] void Defaults(StreamingContext c) { UseHallowIcon = true; UseHallowAccent = true; Look = "follow"; GramsPerPortion = 10; MaxPortions = 6; UseHub = true; QuietOn = true; QuietStart = "22:00"; QuietEnd = "07:00"; FoodLowPct = 20; WaterLowPct = 20; IntakeLowPct = 50; PumpOffMinutes = 30; CameraOfflineMinutes = 5; JamGraceMinutes = 10; FilterDueDays = 2; StreamMode = "auto"; GridSize = 2; NasFolder = "/volume1/docker/wyze-bridge"; FilterEveryDays = 30; CleanEveryDays = 14; }
 
         public static HomeSettings Load()
         {
@@ -101,7 +114,36 @@ namespace HallowHome
             FoodLowPct = Clamp(FoodLowPct, 5, 60, 20); WaterLowPct = Clamp(WaterLowPct, 5, 60, 20); IntakeLowPct = Clamp(IntakeLowPct, 10, 90, 50);
             PumpOffMinutes = Clamp(PumpOffMinutes, 5, 720, 30); CameraOfflineMinutes = Clamp(CameraOfflineMinutes, 1, 120, 5); JamGraceMinutes = Clamp(JamGraceMinutes, 3, 120, 10); FilterDueDays = Clamp(FilterDueDays, 0, 14, 2);
             if (LiveBase != null) { LiveBase = LiveBase.Trim().TrimEnd('/'); if (!Regex.IsMatch(LiveBase, "^https?://[^\\s/?#]+$", RegexOptions.IgnoreCase)) LiveBase = null; }
+            BridgeWebRtc = BaseUrl(BridgeWebRtc); BridgeHls = BaseUrl(BridgeHls);
+            if (LiveBase != null && BridgeWebRtc == null && BridgeHls == null)
+            {
+                // 1.1's one "live view address": the same host gives both players on their usual ports
+                Uri u; if (Uri.TryCreate(LiveBase, UriKind.Absolute, out u))
+                {
+                    var host = u.Scheme + "://" + u.Host;
+                    if (u.Port == 8888) { BridgeHls = LiveBase; BridgeWebRtc = host + ":8889"; }
+                    else if (u.Port == 8889) { BridgeWebRtc = LiveBase; BridgeHls = host + ":8888"; }
+                    else BridgeWebRtc = LiveBase;
+                }
+            }
+            LiveBase = null;
+            if (StreamMode != "mjpeg" && StreamMode != "hls" && StreamMode != "webrtc") StreamMode = "auto";
+            if (GridSize != 3) GridSize = 2;
+            if (WizardSkipped == null) WizardSkipped = new List<string>();
+            WizardSkipped.RemoveAll(x => x != "ha" && x != "cameras" && x != "petlibro");
+            if (string.IsNullOrWhiteSpace(NasFolder) || !Regex.IsMatch(NasFolder.Trim(), "^/[A-Za-z0-9_./\\-]+$") || NasFolder.Contains("..")) NasFolder = "/volume1/docker/wyze-bridge";
+            NasFolder = NasFolder.Trim().TrimEnd('/');
+            FilterEveryDays = Clamp(FilterEveryDays, 1, 180, 30); CleanEveryDays = Clamp(CleanEveryDays, 1, 90, 14);
+            FilterChangedOn = Day(FilterChangedOn); CleanedOn = Day(CleanedOn);
         }
+        // a bridge player's base address (http://nas:8889) or null
+        public static string BaseUrl(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null; s = s.Trim().TrimEnd('/');
+            if (!Regex.IsMatch(s, "^https?://", RegexOptions.IgnoreCase)) { if (s.Contains("://")) return null; s = "http://" + s; }
+            return Regex.IsMatch(s, "^https?://[^\\s/?#@]+$", RegexOptions.IgnoreCase) ? s : null;
+        }
+        public static string Day(string s) { DateTime d; return s != null && DateTime.TryParseExact(s, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out d) ? s : null; }
         static int Clamp(int v, int lo, int hi, int def) { return v < lo || v > hi ? def : v; }
         public string Override(string role) { var o = Overrides.FirstOrDefault(x => x.Role == role); return o == null ? null : o.Entity; }
         public void SetOverride(string role, string entity)

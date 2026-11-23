@@ -3,6 +3,18 @@ HALLOW HOME - your smart-home and pet devices through Home Assistant
 One private app for a Petlibro feeder and fountain, Wyze cameras and an honest Wyze Lock Bolt card,
 with smarter alerts. Home Assistant runs on your NAS and is NOT included - see NAS-SETUP.md.
 
+WHAT'S NEW IN 1.2
+- Setup page: a guided setup for Home Assistant (test the address, the exact token clicks, test again),
+  the cameras (a ready-to-paste docker-wyze-bridge snippet for Synology Container Manager - your Wyze
+  password and keys go in on the NAS only) and Petlibro (HACS). Each step can be skipped and shows what's
+  still missing.
+- Demo mode: explore with made-up devices before the NAS is ready. Nothing is sent anywhere.
+- Cameras: 2x2 / 3x3 grid, full screen, snapshot, sound muted until you unmute it; WebRTC / HLS from the
+  bridge or MJPEG from Home Assistant; pauses when the window is hidden or minimised; reconnects by itself.
+- The feeder's own schedule: see it, and change it (with a confirm) when the Petlibro integration allows it.
+  "Fed today" now shows what's planned too.
+- Fountain filter / cleaning reminders (the fountain's own counters, or your own interval).
+
 WHAT'S NEW IN 1.1.1
 - Percentages read 45% instead of 45 %.
 
@@ -25,7 +37,7 @@ FIRST TIME
 1. Set up Home Assistant on your NAS (NAS-SETUP.md): Docker, docker-wyze-bridge, HACS, the community
    Wyze and Petlibro integrations (you sign in to those yourself, in Home Assistant).
 2. In Home Assistant: your profile > Security > Long-lived access tokens > Create token.
-3. In Hallow Home: Settings > paste the address (e.g. http://nas:8123) and the token > Save.
+3. In Hallow Home: the Setup page (or Settings) > paste the address (e.g. http://nas:8123) and the token.
    The token is kept encrypted for your Windows user only and never logged.
 4. Devices page: check what Hallow Home matched; change anything it guessed wrong.
 5. Alerts page: switch on Discord and/or ntfy if you want alerts on your phone.

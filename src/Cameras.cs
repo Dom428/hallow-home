@@ -57,11 +57,14 @@ namespace HallowHome
     }
 
     // one running stream (a camera tile): frames come in on a background thread, Frame is called with each decoded picture
+    // 1.2: it reconnects with a growing pause (2, 4, 8, 16, then every 30 s - Streams.Backoff) and says so ("Reconnecting in 4 s")
     public class CameraFeed
     {
-        public readonly string Camera; volatile bool stopped; public int Frames; public string Error;
-        public Action<BitmapSource> Frame; public event Action<string> Failed;
+        public readonly string Camera; volatile bool stopped; public int Frames, Attempts, Fails; public string Error;
+        public string Status = "Connecting…"; public DateTime? RetryAt;
+        public Action<BitmapSource> Frame; public event Action<string> Failed; public event Action<string> StatusChanged;
         public CameraFeed(string camera) { Camera = camera; }
+        void Say(string s) { Status = s; var h = StatusChanged; if (h != null) h(s); }
         public void Start(Ha ha, int maxFps)
         {
             new Thread(() =>
@@ -69,23 +72,31 @@ namespace HallowHome
                 int fails = 0; var minGap = TimeSpan.FromMilliseconds(1000.0 / Math.Max(1, maxFps)); var last = DateTime.MinValue;
                 while (!stopped)
                 {
+                    Attempts++; bool any = false;
                     try
                     {
                         using (var resp = ha.OpenStream(Camera)) using (var s = resp.GetResponseStream())
                             Mjpeg.Read(s, () => stopped, jpg =>
                             {
-                                fails = 0; Frames++;
+                                if (!any) { any = true; fails = 0; Fails = 0; RetryAt = null; Say("Live"); }
+                                Frames++;
                                 if (DateTime.Now - last < minGap) return; last = DateTime.Now;
                                 var bmp = Mjpeg.Decode(jpg); var h = Frame; if (bmp != null && h != null) h(bmp);
                             });
+                        if (!any) throw new Exception("the stream ended without a picture");
                     }
                     catch (Exception e) { Error = e.Message; var f = Failed; if (f != null) f(e.Message); }
                     if (stopped) break;
-                    for (int i = 0; i < Math.Min(30, 2 << Math.Min(4, fails++)) * 5 && !stopped; i++) Thread.Sleep(200);
+                    var wait = Streams.Backoff(any ? 0 : fails); if (!any) { fails++; Fails = fails; }
+                    RetryAt = DateTime.Now + wait;
+                    Say(any ? "Reconnecting…" : "Reconnecting in " + Math.Max(1, (int)Math.Round(wait.TotalSeconds)) + " s");
+                    var until = DateTime.Now + wait; while (DateTime.Now < until && !stopped) Thread.Sleep(Math.Max(10, Math.Min(200, (int)(until - DateTime.Now).TotalMilliseconds)));
                 }
+                Say("Stopped");
             }) { IsBackground = true, Name = "camera " + Camera }.Start();
         }
         public void Stop() { stopped = true; }
+        public bool Stopped { get { return stopped; } }
     }
 
     public class Recording { public string Path, Name; public long Size; public DateTime When; }
@@ -122,12 +133,13 @@ namespace HallowHome
             return Regex.Replace(Regex.Replace(n, "[^a-z0-9]+", "-"), "^-+|-+$", "");
         }
         public static string LiveUrl(string liveBase, Entity cam) { return liveBase == null || cam == null ? null : liveBase.TrimEnd('/') + "/" + BridgeName(cam) + "/"; }
-        public static string SnapshotFolder { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Hallow Home"); } }
-        public static string SaveSnapshot(string camLabel, byte[] jpeg, string folder = null)
+        // Pictures\Hallow Home (the tests use their own folder, never your Pictures)
+        public static string SnapshotFolder { get { return HomeSettings.TestDir != null ? Path.Combine(HomeSettings.TestDir, "Pictures", "Hallow Home") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Hallow Home"); } }
+        public static string SaveSnapshot(string camLabel, byte[] jpeg, string folder = null, string ext = ".jpg")
         {
             folder = folder ?? SnapshotFolder; Directory.CreateDirectory(folder);
             var safe = Regex.Replace(camLabel ?? "camera", "[^A-Za-z0-9 \\-]+", "").Trim(); if (safe.Length == 0) safe = "camera";
-            var f = Path.Combine(folder, safe + " " + DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss") + ".jpg");
+            var f = Path.Combine(folder, safe + " " + DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss") + ext);
             File.WriteAllBytes(f, jpeg); return f;
         }
     }

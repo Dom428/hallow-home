@@ -5,7 +5,7 @@
 Part of the Hallow family of Windows apps. Hallow Home shows your pet feeder and water fountain, your cameras and your door lock in
 one window, sends smarter alerts than the vendor apps, and runs a few simple automations. Everything goes through **Home Assistant
 (HA)** on your NAS - Hallow Home is only the PC side and never talks to Petlibro's or Wyze's cloud itself. Home Assistant is **not**
-included: [NAS-SETUP.md](NAS-SETUP.md) shows the Docker setup.
+included: [NAS-SETUP.md](NAS-SETUP.md) shows the Docker setup, and since 1.2 the **Setup** page walks you through it.
 
 ![Dashboard (made-up devices)](docs/dashboard.png)
 
@@ -24,6 +24,33 @@ included: [NAS-SETUP.md](NAS-SETUP.md) shows the Docker setup.
 - **Alerts and automations only run while Hallow Home runs** (it can start with Windows, in the tray). For anything that must work
   with the PC off, make an automation in Home Assistant itself.
 
+## What's new in 1.2
+
+- **Guided setup** (the new Setup page): three steps, each can be skipped, and the list always shows what's still missing.
+  1. **Home Assistant**: paste the address and *Test connection* (no token needed - it looks for Home Assistant's web app), the
+     exact clicks to make a long-lived token, then paste it and *Test again* (it says what it found: feeder, fountain, cameras).
+  2. **Cameras**: a ready-to-paste **docker-compose snippet for docker-wyze-bridge** on a Synology NAS (Container Manager >
+     Project), with clearly marked `<REPLACE...>` placeholders for the Wyze API ID / key, e-mail and password. **Hallow Home never
+     asks for your Wyze password or keys** - you type them on the NAS only. Then the Generic Camera clicks and *Test the bridge*.
+  3. **Petlibro**: the HACS custom-repository steps for the community integration (and the second-account tip).
+- **Demo mode**: explore the app now with made-up devices - a stand-in Home Assistant runs inside Hallow Home on localhost.
+  Nothing reaches your Home Assistant, cameras, feeder or accounts, and no alerts are sent.
+- **Cameras**: a **2×2 / 3×3 grid** (with pages), **full screen** per camera, snapshot to Pictures\Hallow Home, and a
+  **mute toggle (muted every time it opens)**. It uses what the bridge offers - **WebRTC or HLS** (docker-wyze-bridge's players,
+  in WebView2) or Home Assistant's **MJPEG** - and *Auto* keeps the grid on light MJPEG pictures. Streams and players **pause when
+  the window is hidden or minimised** and **reconnect with a growing pause** (2, 4, 8, 16, then 30 s).
+- **Feeder schedule**: the feeder's own plan, read from the integration's *Feeding schedule* sensor. Edit, add, turn off or delete
+  a meal through the integration's documented services (`petlibro.edit_feeding_plan` / `add_feeding_plan` /
+  `toggle_feeding_plan` / `delete_feeding_plan`) - **each only after a confirm** that says exactly what changes. If your
+  integration version doesn't offer those services, the schedule is shown **read-only, and it says so**. **Fed today** now
+  compares with the plan ("2 meals · 20 g of 30 g planned").
+- **Fountain reminders**: filter and cleaning from the integration's days-left entities, or **your own interval** ("every 30
+  days", restarted with *Changed the filter today*), next to the low-water alert.
+
+![Setup, not set up yet (made-up state)](docs/setup-new.png)
+
+![Pets with the feeder's schedule (made-up devices)](docs/pets-tall.png)
+
 ## What it does
 
 - **Dashboard**: what needs a look, the feeder, the fountain, the lock and the first cameras.
@@ -35,9 +62,9 @@ included: [NAS-SETUP.md](NAS-SETUP.md) shows the Docker setup.
     **pump status**, and the **irregularities explained in plain words** ("the pump isn't running - check the tank sits on the dock...").
 
   ![Pets with problems (made-up devices)](docs/pets-trouble.png)
-- **Cameras**: a live grid from Home Assistant's camera proxy (MJPEG; the token stays in a header, never in a URL), only while the
-  page is open and never while you play. Click one for the big view, a **snapshot** (saved to Pictures\Hallow Home) and an optional
-  **live view** - docker-wyze-bridge's own WebRTC / HLS player in a WebView2 window. **Recordings**: set the folder where the bridge
+- **Cameras**: a live 2×2 / 3×3 grid from Home Assistant's camera proxy (MJPEG; the token stays in a header, never in a URL) or
+  docker-wyze-bridge's WebRTC / HLS players, only while the page is open and visible, never while you play. Click one for the big
+  view, **full screen**, a **snapshot** (saved to Pictures\Hallow Home) and **sound** (muted until you unmute it). **Recordings**: set the folder where the bridge
   or HA records on the NAS and the newest files are listed (Hallow Home never records or deletes anything).
 
   ![Cameras (made-up pictures)](docs/cameras.png)
@@ -72,10 +99,10 @@ included: [NAS-SETUP.md](NAS-SETUP.md) shows the Docker setup.
 
 Download `Hallow.Home.zip` from the [latest release](https://github.com/Dom428/hallow-home/releases/latest), right-click it >
 Properties > **Unblock**, Extract All, double-click **INSTALL.bat** (no admin). Or install it from **Hallow Setup**.
-Then: set up Home Assistant ([NAS-SETUP.md](NAS-SETUP.md)), make a long-lived access token (HA: your profile > Security), and paste
-the address and token on Hallow Home's Settings page.
+Then open the **Setup** page: it walks through Home Assistant, the cameras and Petlibro (details in [NAS-SETUP.md](NAS-SETUP.md))
+- or try **Demo mode** first.
 
-Needs Windows 10/11 x64 and .NET Framework 4.8 (built in). The optional live view uses the Microsoft Edge WebView2 Runtime (built into
+Needs Windows 10/11 x64 and .NET Framework 4.8 (built in). The bridge's WebRTC / HLS players use the Microsoft Edge WebView2 Runtime (built into
 Windows 11; Hallow Home never downloads it).
 
 ## Privacy and safety
@@ -87,6 +114,8 @@ Windows 11; Hallow Home never downloads it).
   or HA's login with MFA in front; never the cameras unauthenticated).
 - Feeding always needs a confirm (the dialog, or `confirm` over the family pipe). Unlocking (if a lock ever works) always asks and is
   never offered over the pipe or to automations.
+- Every change to the feeder's schedule needs a confirm too, and is never offered over the pipe or to automations.
+- Demo mode runs on localhost only, with made-up data; its token lives in memory. Every camera player starts muted.
 
 ## Hallow family link
 
@@ -103,9 +132,13 @@ Windows 11; Hallow Home never downloads it).
 ## Building and testing
 
 `.\build.ps1 -Tests` builds `HallowHome.exe` and `tests\HomeTests.exe` with the C# compiler that ships with Windows. The tests run
-against a **fake Home Assistant** (`tests\FakeHa.cs`): REST, the WebSocket API with `state_changed`, service calls with the effects
+against a **stand-in Home Assistant** (`src\DemoHa.cs` - Demo mode uses it too): REST, the WebSocket API with `state_changed`, service calls with the effects
 a feeder would have, an MJPEG camera made of generated frames, and made-up entities modelled on the community Petlibro and Wyze
 integrations (feeder, fountain, cameras, an unavailable Lock Bolt). They cover the mapping and overrides, Feed now only after a
 confirm and its portion range, every alert rule (the jam and the low-intake check on synthetic data), de-duplication and quiet hours, the camera grid
-loading the fake stream, the live view, token encryption and the pipe. `HallowHome.exe --snap <folder>` renders every page in light
+loading the fake stream, token encryption and the pipe. Since 1.2 also: the setup wizard against the stand-in, the compose
+snippet, the grid / paging / pause when hidden / reconnect with back-off, the bridge's WebRTC / HLS player stand-ins in WebView2
+(off-screen and **muted** - `--mute-audio` and `IsMuted` before navigating), full screen, the schedule through its Petlibro services
+with the confirm (and the read-only case), the reminders, Demo mode and "45%" in every text. The suite has a 5-minute kill
+timeout. `HallowHome.exe --snap <folder>` renders every page in light
 and dark with made-up devices. Icons: Font Awesome Free (CC BY 4.0). WebView2 SDK: Microsoft (see WebView2-LICENSE.txt).

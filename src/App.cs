@@ -19,14 +19,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Home")]
 [assembly: AssemblyProduct("Hallow Home")]
 [assembly: AssemblyDescription("Your smart-home and pet devices through Home Assistant, the Hallow way")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
 
 namespace HallowHome
 {
     public static class Program
     {
-        public const string Version = "1.1.1";
+        public const string Version = "1.2";
         [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr v);
 
         [STAThread]
@@ -90,6 +90,13 @@ namespace HallowHome
                 // not set up yet
                 var c3 = new Controller(true, true); c3.SnapEmpty();
                 var w3 = new MainWindow(c3); w3.Show("dashboard"); Snap.Save(w3, Path.Combine(dir, "dashboard-new" + sfx + ".png"), 1200, 800);
+                // 1.2: the setup wizard from scratch (tall, to show every step), the 3x3 grid, the schedule dialog, read-only schedule
+                w3.Show("setup"); Snap.Save(w3, Path.Combine(dir, "setup-new" + sfx + ".png"), 1200, 2900);
+                w.Show("setup"); Snap.Save(w, Path.Combine(dir, "setup-tall" + sfx + ".png"), 1200, 2900);
+                w.Show("pets"); Snap.Save(w, Path.Combine(dir, "pets-tall" + sfx + ".png"), 1200, 1150);
+                c.S.GridSize = 3; w.Show("cameras"); Snap.Save(w, Path.Combine(dir, "cameras-3x3" + sfx + ".png"), 1200, 800); c.S.GridSize = 2;
+                Snap.Save(Dialogs.PlanWindow(c, c.Feeder.Schedule.Plans.FirstOrDefault(), null), Path.Combine(dir, "dialog-plan" + sfx + ".png"), 480, 0);
+                c.ScheduleEditable = false; w.Show("pets"); Snap.Save(w, Path.Combine(dir, "pets-readonly" + sfx + ".png"), 1200, 1150); c.ScheduleEditable = true;
                 Snap.Save(Dialogs.FeedWindow(c, null), Path.Combine(dir, "dialog-feed" + sfx + ".png"), 460, 0);
                 Snap.Save(CrashNotice.Make(Path.Combine(dir, "example.txt")), Path.Combine(dir, "crash" + sfx + ".png"), 440, 0);
             }
@@ -153,7 +160,98 @@ namespace HallowHome
         public string[] LogLines() { lock (log) return log.ToArray(); }
         void Fire() { WriteStatus(); var h = Changed; if (h != null) h(); }
         bool snapUnset; public bool SnapLive;
-        public bool Configured { get { return !snapUnset && S.HaUrl != null && SecretStore.Has(SecretStore.Token); } }
+        public bool Configured { get { return !snapUnset && (S.Demo || (S.HaUrl != null && SecretStore.Has(SecretStore.Token))); } }
+
+        // ---------------- 1.2: Demo mode, the bridge's players, the feeder's schedule
+        DemoHa demo; History demoHist; readonly HashSet<string> demoSeen = new HashSet<string>(); public DemoHa Demo { get { return demo; } }
+        public History ShownHist { get { return S.Demo && demoHist != null ? demoHist : Hist; } }
+        public string BridgeHls { get { return S.Demo && demo != null ? demo.HlsBase : S.BridgeHls; } }
+        public string BridgeWebRtc { get { return S.Demo && demo != null ? demo.WebRtcBase : S.BridgeWebRtc; } }
+        public bool? BridgeHlsOk, BridgeWebRtcOk; public bool BridgeProbing; int probeGen;
+        // asks the bridge once which players it offers (for "Auto"), using the first online camera's name
+        public void ProbeBridge(Action done = null)
+        {
+            if (SnapMode) return;
+            var hb = BridgeHls; var wb = BridgeWebRtc; var gen = ++probeGen;
+            if (hb == null && wb == null) { BridgeHlsOk = BridgeWebRtcOk = null; if (done != null) done(); return; }
+            var cam = Map.Cameras.FirstOrDefault(x => x.Available && (Feeder.Camera == null || x.Id != Feeder.Camera.Id));
+            var name = cam != null ? Cams.BridgeName(cam) : S.Demo ? "front-door" : null;
+            if (name == null) { if (done != null) done(); return; }
+            BridgeProbing = true;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                var h1 = Streams.ProbeHls(hb, name); var w1 = Streams.ProbeWebRtc(wb, name);
+                ui.BeginInvoke(new Action(() => { if (gen != probeGen) return; BridgeProbing = false; BridgeHlsOk = h1; BridgeWebRtcOk = w1; Log("bridge: HLS " + (h1 == true ? "yes" : "no") + ", WebRTC " + (w1 == true ? "yes" : "no")); Fire(); if (done != null) done(); }));
+            });
+        }
+        public string StreamFor(Entity cam, bool forGrid)
+        {
+            if (SnapMode) return "mjpeg";
+            return Streams.Pick(S.StreamMode, forGrid, Connected && ha != null, BridgeHlsOk, BridgeWebRtcOk, BridgeHls != null, BridgeWebRtc != null);
+        }
+        public string PlayerUrl(string kind, Entity cam) { return Streams.PlayerUrl(kind, BridgeHls, BridgeWebRtc, cam); }
+        public void SetDemo(bool on)
+        {
+            if (S.Demo == on) return;
+            S.Demo = on; S.Save(); Log(on ? "Demo mode on" : "Demo mode off");
+            Entities.Clear(); Active = new List<Alert>(); BridgeHlsOk = BridgeWebRtcOk = null;
+            Connect(); Recompute();
+        }
+
+        public bool? ScheduleEditable; string scheduleDevice;
+        // a change to the feeder's own schedule, through the Petlibro integration's services. Only ever after a confirm.
+        public string ScheduleChange(PlanEdit e, bool confirmed, Action<string> done)
+        {
+            if (!Connected || ha == null) return "Hallow Home isn't connected to Home Assistant.";
+            var v = Feeder.Schedule;
+            if (!v.Present) return "No feeding schedule was found for the feeder (the Petlibro integration's Feeding schedule sensor).";
+            if (ScheduleEditable != true) return "The Petlibro integration in your Home Assistant doesn't offer schedule changes, so it's shown read-only. Change it in the Petlibro app, or update the integration.";
+            var err = Schedule.Check(e, v, 48); if (err != null) return err;
+            if (!confirmed) return "Schedule changes need a confirm.";
+            var h = ha; var ent = v.Entity.Id;
+            Log("schedule: " + e.Kind + " " + (e.Kind == "add" ? e.Time : e.PlanId.ToString()) + ", confirmed");
+            new Thread(() =>
+            {
+                string x = null;
+                try
+                {
+                    var dev = scheduleDevice ?? h.DeviceIdOf(ent); scheduleDevice = dev;
+                    string service; var data = Schedule.Data(e, dev, out service);
+                    h.Call("petlibro", service, data);
+                }
+                catch (Exception ex) { x = ex.Message; }
+                ui.BeginInvoke(new Action(() => { Log("schedule: " + (x ?? "sent")); if (done != null) done(x); }));
+            }) { IsBackground = true, Name = "schedule" }.Start();
+            return null;
+        }
+        // own reminder intervals: "I changed the filter today" / "I cleaned it today" (only remembered here)
+        public void MarkDone(string kind)
+        {
+            var d = Now().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            if (kind == "filter") S.FilterChangedOn = d; else S.CleanedOn = d;
+            S.Save(); Log(kind + " done today"); Recompute();
+        }
+        // a still from Home Assistant (or, for a bridge player, what the player shows), saved to Pictures\Hallow Home
+        public void Snapshot(Entity cam, PlayerView pv, Action<string> done)
+        {
+            var h = ha;
+            if (h != null && Connected)
+            {
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    string msg; try { var f = Cams.SaveSnapshot(cam.Label, h.Snapshot(cam.Id)); msg = "Saved " + Path.GetFileName(f) + " in Pictures\\Hallow Home."; } catch (Exception e) { msg = "Snapshot failed: " + e.Message; }
+                    ui.BeginInvoke(new Action(() => done(msg)));
+                });
+                return;
+            }
+            if (pv != null)
+            {
+                var t = pv.Capture();
+                t.ContinueWith(r => { string msg; try { var f = Cams.SaveSnapshot(cam.Label, r.Result, null, ".png"); msg = "Saved " + Path.GetFileName(f) + " in Pictures\\Hallow Home."; } catch (Exception e) { msg = "Snapshot failed: " + Family.OneLine(e.Message); } ui.BeginInvoke(new Action(() => done(msg))); });
+                return;
+            }
+            done("Snapshots need Home Assistant (or a bridge player) to be connected.");
+        }
         public bool Away { get { return S.Away || Map.EveryoneAway == true; } }
         public DateTime? SnoozeUntil { get { DateTime d; return DateTime.TryParse(S.SnoozeUntil, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out d) && d > Now() ? d : (DateTime?)null; } }
 
@@ -162,25 +260,37 @@ namespace HallowHome
         {
             if (SnapMode) return;
             if (ha != null) { ha.StopEvents(); ha = null; }
-            Connected = false; LastError = null; HaVersion = null;
+            Connected = false; LastError = null; HaVersion = null; ScheduleEditable = null; scheduleDevice = null;
+            if (!S.Demo && demo != null) { demo.Dispose(); demo = null; }
             if (!Configured) { Connecting = false; Fire(); return; }
-            var h = new Ha(S.HaUrl, SecretStore.Get(SecretStore.Token)); ha = h; Connecting = true; Fire();
-            Log("connecting to Home Assistant");
+            Ha h;
+            if (S.Demo)
+            {
+                // Demo mode: the made-up home runs inside this app, on localhost; its token lives in memory only
+                if (demo == null) { demo = new DemoHa(); demoHist = FakeData.Week(DateTime.Now); }
+                h = new Ha(demo.Url, demo.Token);
+            }
+            else h = new Ha(S.HaUrl, SecretStore.Get(SecretStore.Token));
+            ha = h; Connecting = true; Fire();
+            Log(S.Demo ? "Demo mode: connecting to the made-up home" : "connecting to Home Assistant");
+            ProbeBridge();
             new Thread(() =>
             {
-                string err = null; List<Entity> states = null; string ver = null;
+                string err = null; List<Entity> states = null; string ver = null; bool? editable = null;
                 try { h.Check(); states = h.States(); ver = h.Version(); } catch (Exception e) { err = e.Message; }
+                if (err == null) try { editable = Schedule.Editable(h.ServicesJson()); } catch { }
                 ui.BeginInvoke(new Action(() =>
                 {
                     if (ha != h) return;
                     Connecting = false;
                     if (err != null) { LastError = err; Connected = false; Log("connect failed: " + err); retryAt = Now().AddSeconds(30); Fire(); return; }
-                    Connected = true; HaVersion = ver; LastSync = Now(); lastRefresh = DateTime.Now; Log("connected: " + states.Count + " entities");
+                    Connected = true; HaVersion = ver; ScheduleEditable = editable; LastSync = Now(); lastRefresh = DateTime.Now; Log("connected: " + states.Count + " entities");
                     Entities.Clear(); foreach (var e in states) Entities[e.Id] = e;
                     h.StateChanged += (e, id) => ui.BeginInvoke(new Action(() => { if (ha == h) ApplyState(e, id); }));
                     h.Live += (on, why) => ui.BeginInvoke(new Action(() => { if (ha != h) return; Log(on ? "live updates on" : "live updates off" + (why != null ? ": " + why : "")); Fire(); }));
                     h.StartEvents();
                     Recompute();
+                    if (BridgeHlsOk == null && BridgeWebRtcOk == null) ProbeBridge();
                 }));
             }) { IsBackground = true, Name = "ha connect" }.Start();
         }
@@ -219,14 +329,19 @@ namespace HallowHome
             var now = Now();
             Map = Roles.Build(Entities.Values, S);
             Feeder = FeederView.From(Map, S, now);
-            var intake = Map.Get("fountain.intake"); if (intake != null && intake.Num != null && !SnapMode) Hist.Record(now, intake.Num.Value);
-            Fountain = FountainView.From(Map, S, Hist, now);
+            var intake = Map.Get("fountain.intake"); if (intake != null && intake.Num != null && !SnapMode && !S.Demo) Hist.Record(now, intake.Num.Value);
+            Fountain = FountainView.From(Map, S, ShownHist, now);
             Lock = LockInfo.View(Map);
             Active = Connected || SnapMode ? Engine.Evaluate(now, Map, Feeder, Fountain, S, Away) : new List<Alert>();
-            if (!SnapMode)
+            if (!SnapMode && !S.Demo)
             {
                 foreach (var d in Desk.Process(Active, now, S, Game != null, SnoozeUntil)) Deliver(d.Alert.Title, d.Alert.Text, d.Pc, d.Phone, d.Alert.Bad);
                 foreach (var a in autos.Evaluate(now, S.Automations, Active, Entities, Away)) RunAutomation(a);
+            }
+            else if (!SnapMode)
+            {
+                // Demo mode: each new alert is listed on the Alerts page as "not sent" - nothing leaves the PC
+                foreach (var a in Active.Where(x => !demoSeen.Contains(x.Key)).ToList()) { demoSeen.Add(a.Key); Deliver(a.Title, a.Text, true, true, a.Bad); }
             }
             var print = string.Join("|", Map.ByRole.Select(kv => kv.Key + "=" + kv.Value.State)) + "#" + string.Join("|", Map.Cameras.Select(x => x.Id + "=" + x.State)) + "#" + string.Join("|", Active.Select(x => x.Key)) + "#" + Connected + Live + Game + LastError + Away + Entities.Count;
             if (force || print != lastPrint) Fire();
@@ -251,8 +366,9 @@ namespace HallowHome
             }
         }
         // one alert out: the PC (Hub notify / own balloon) and the phone (Discord, ntfy) as switched on in Settings
-        public void Deliver(string title, string text, bool pc, bool phone, bool urgent)
+        public void Deliver(string title, string text, bool pc, bool phone, bool urgent, bool evenInDemo = false)
         {
+            if (S.Demo && !evenInDemo) { Log("demo: not sent - " + title); lock (Sent) { Sent.Insert(0, Now().ToString("ddd HH:mm") + "  " + title + "  → not sent (Demo mode)"); if (Sent.Count > 50) Sent.RemoveAt(Sent.Count - 1); } return; }
             var ch = new List<string>();
             if (pc && S.UseHub) { Notify(title, text); ch.Add("PC"); }
             else if (!pc) NotificationsHeld++;
@@ -371,11 +487,12 @@ namespace HallowHome
             main = null;
             if (!S.TrayHintShown && !quitting) { S.TrayHintShown = true; S.Save(); Notify("Hallow Home is still here", "It keeps watching your pets' devices and cameras from the tray. Right-click the icon to quit."); }
         }
-        public void Detach() { quitting = true; if (ha != null) ha.StopEvents(); if (tick != null) tick.Stop(); }   // tests: stop without ending the process
+        public void Detach() { quitting = true; if (ha != null) ha.StopEvents(); if (tick != null) tick.Stop(); if (demo != null) { demo.Dispose(); demo = null; } }   // tests: stop without ending the process
         public void Quit()
         {
             if (quitting) return; quitting = true;
             if (ha != null) ha.StopEvents();
+            if (demo != null) { try { demo.Dispose(); } catch { } demo = null; }
             if (tray != null) { tray.Visible = false; tray.Dispose(); }
             WriteStatus(false);
             if (main != null) main.Exiting = true;
@@ -523,7 +640,7 @@ namespace HallowHome
         public Dictionary<string, object> StatusData(bool running)
         {
             var d = new Dictionary<string, object> { { "app", "Home" }, { "version", Program.Version }, { "updated", Family.Time(DateTime.Now) }, { "running", running },
-                { "configured", Configured }, { "connected", Connected }, { "live", Live }, { "entities", Entities.Count },
+                { "configured", Configured }, { "demo", S.Demo }, { "connected", Connected }, { "live", Live }, { "entities", Entities.Count },
                 { "cameras", Map.Cameras.Count }, { "camerasOnline", Map.Cameras.Count(c => c.Available) } };
             d["feeder"] = !Feeder.Present ? null : new Dictionary<string, object> { { "online", Feeder.Online }, { "nextFeed", Feeder.Next == null ? null : Family.Time(Feeder.Next.Value) },
                 { "todayMeals", Feeder.TodayMeals }, { "todayGrams", Feeder.TodayGrams }, { "foodLow", Feeder.FoodLow }, { "canFeed", Feeder.CanFeed },
@@ -624,9 +741,9 @@ namespace HallowHome
         // ---------------- --snap: made-up state
         public void SnapSetup(bool trouble)
         {
-            var now = DateTime.Now.Date.AddHours(16).AddMinutes(20); Now = () => now;
+            var now = DateTime.Now.Date.AddHours(16).AddMinutes(20); Now = () => now; S.Demo = false; S.OwnReminders = false; S.StreamMode = "auto"; S.GridSize = 2;
             Connected = true; SnapLive = true; HaVersion = "2026.11.2"; LastSync = now.AddSeconds(-4); S.HaUrl = "http://nas:8123";
-            S.UseDiscord = true; S.UseNtfy = true; S.RecordingsFolder = null; S.LiveBase = "http://nas:8889";
+            S.UseDiscord = true; S.UseNtfy = true; S.RecordingsFolder = null; S.BridgeWebRtc = "http://nas:8889"; S.BridgeHls = "http://nas:8888"; ScheduleEditable = true; BridgeWebRtcOk = true; BridgeHlsOk = true;
             Hist = FakeData.Week(now);
             foreach (var e in FakeData.Entities(now)) Entities[e.Id] = e;
             if (trouble)
@@ -645,7 +762,7 @@ namespace HallowHome
             Recompute();
         }
         void Set(string id, string state, DateTime changed) { Entity e; if (Entities.TryGetValue(id, out e)) { e.State = state; e.Changed = changed; } }
-        public void SnapEmpty() { var now = DateTime.Now.Date.AddHours(16).AddMinutes(20); Now = () => now; S.HaUrl = null; snapUnset = true; Recompute(); }
+        public void SnapEmpty() { var now = DateTime.Now.Date.AddHours(16).AddMinutes(20); Now = () => now; S.Demo = false; S.HaUrl = null; S.BridgeHls = S.BridgeWebRtc = null; S.WizardSkipped.Clear(); snapUnset = true; Recompute(); }
     }
 
     // the family game list (DeltaForceClient-Win64-Shipping.exe, Discovery-d.exe) plus Hallow Hub's status.json "playing"

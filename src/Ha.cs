@@ -103,7 +103,7 @@ namespace HallowHome
         }
         static string Read(WebResponse resp) { using (var s = resp.GetResponseStream()) using (var rd = new StreamReader(s, Encoding.UTF8)) return rd.ReadToEnd(); }
         // turns a failure into words a person can act on (never the token)
-        static HaException Explain(Exception e)
+        internal static HaException Explain(Exception e)
         {
             var we = e as WebException;
             if (we != null && we.Response is HttpWebResponse)
@@ -156,6 +156,32 @@ namespace HallowHome
             Post("/api/services/" + domain + "/" + service, Family.Json(data ?? new Dictionary<string, object>()));
         }
         public byte[] Snapshot(string camera) { return GetBytes("/api/camera_proxy/" + camera); }
+        // 1.2: GET /api/services (does the Petlibro integration offer schedule services?) and POST /api/template (a device's id)
+        public string ServicesJson() { return Get("/api/services"); }
+        public string DeviceIdOf(string entityId)
+        {
+            if (!ValidEntityId(entityId)) throw new HaException("Bad entity id.", 0);
+            var r = (Post("/api/template", Family.Json(new Dictionary<string, object> { { "template", "{{ device_id('" + entityId + "') }}" } })) ?? "").Trim();
+            if (r.Length == 0 || r == "None" || !Regex.IsMatch(r, "^[A-Za-z0-9]+$")) throw new HaException("Home Assistant doesn't know which device that entity belongs to.", 0);
+            return r;
+        }
+        // 1.2, the wizard's first test (no token yet): is that Home Assistant? Its web app's /manifest.json says "Home Assistant";
+        // an API that asks for a token (401 on /api/) is the next best sign. Returns what it found, in words; throws when nothing answers.
+        public static string Probe(string url, int timeoutMs = 8000)
+        {
+            var u = NormalizeUrl(url); if (u == null) throw new HaException("That isn't an address like http://nas:8123.", 0);
+            var h = new Ha(u, "") { TimeoutMs = timeoutMs };
+            try
+            {
+                var r = (HttpWebRequest)WebRequest.Create(u + "/manifest.json"); r.Timeout = timeoutMs; r.ReadWriteTimeout = timeoutMs; r.Proxy = null; r.AllowAutoRedirect = false; r.UserAgent = "HallowHome";
+                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+                using (var resp = r.GetResponse()) if (Read(resp).Contains("Home Assistant")) return "Home Assistant answered at " + u + ".";
+            }
+            catch (WebException e) { if (e.Response == null) throw Explain(e); e.Response.Close(); }
+            catch (Exception e) { throw Explain(e); }
+            try { h.Get("/api/"); return "Something answered at " + u + " - it looks like Home Assistant."; }
+            catch (HaException e) { if (e.Status == 401 || e.Status == 403) return "Home Assistant's API answered at " + u + " (it wants a token - that's step 2)."; throw new HaException("Something answered at " + u + ", but it doesn't look like Home Assistant (" + e.Message + ")", e.Status); }
+        }
         // the MJPEG stream (Cameras.Mjpeg reads it); the caller disposes the response
         public WebResponse OpenStream(string camera)
         {

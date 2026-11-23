@@ -35,6 +35,7 @@ namespace HallowHome
         public static readonly RoleDef[] All = {
             D("feeder.feed", "Feed now (button)", "button", "manual feed|feed now"),
             D("feeder.portion", "Portions for Feed now", "number,select", "(manual feed|feed now|feeding) (quantity|portion|portions|amount)|portions?\\b"),
+            D("feeder.schedule", "Feeding schedule", "binary_sensor,sensor", "(?<!today\\W?s )(?<!today )feeding (schedule|plan)\\b"),
             D("feeder.next", "Next feeding", "sensor", "next (feed|feeding|meal)|upcoming (feed|meal)"),
             D("feeder.last", "Last feeding", "sensor", "last (feed|feeding|meal|dispens)"),
             D("feeder.grams", "Food dispensed today", "sensor", "today.*(quantity|amount|weight|grams|dispensed)|(feed|feeding) (quantity|amount) today|dispensed today"),
@@ -171,6 +172,14 @@ namespace HallowHome
         public DateTime? Next, Last; public double? NextGrams; public double? TodayGrams; public int? TodayMeals;
         public double? FoodPct; public bool FoodLow; public string FoodText; public bool Jam;
         public string Desiccant, Battery, Wifi; public bool? Muted; public Entity Camera; public bool CanFeed; public bool PortionEntity;
+        // 1.2: the feeder's own schedule, and "fed today" against what's planned for today
+        public ScheduleView Schedule = new ScheduleView(); public double? PlannedGrams; public int PlannedMeals;
+        public string FedTodayText(double perPortion)
+        {
+            var s = (TodayMeals != null ? TodayMeals + " meal" + (TodayMeals == 1 ? "" : "s") : "-") + (TodayGrams != null ? " · " + Read.Num(TodayGrams.Value) + " g" : "");
+            if (PlannedGrams != null) s += " of " + Read.Num(PlannedGrams.Value) + " g planned";
+            return s;
+        }
         public static FeederView From(Mapping m, HomeSettings s, DateTime now)
         {
             var f = new FeederView { Present = m.HasFeeder };
@@ -196,6 +205,9 @@ namespace HallowHome
             var snd = m.Get("feeder.sound"); if (snd != null && snd.Available) f.Muted = snd.Words.Contains("mute") ? snd.On : !snd.On;
             f.Camera = m.Get("feeder.camera");
             var btn = m.Get("feeder.feed"); f.CanFeed = btn != null && btn.Available; f.PortionEntity = m.Get("feeder.portion") != null;
+            f.Schedule = ScheduleView.From(m.Get("feeder.schedule"));
+            var today = f.Schedule.TodayPlans.ToList();
+            if (f.Schedule.Present && f.Schedule.On && today.Count > 0) { f.PlannedMeals = today.Count; f.PlannedGrams = today.Sum(p => p.GramsOr(s.GramsPerPortion)); }
             return f;
         }
     }
@@ -207,6 +219,7 @@ namespace HallowHome
         public bool FilterDue; public string FilterText; public bool CleaningDue; public string CleaningText;
         public bool? PumpOn; public string PumpText; public DateTime? PumpSince;
         public double? IntakeToday, IntakeAvg; public string Unit; public int? IrregularCount;
+        public Reminder Filter = new Reminder(), Cleaning = new Reminder();
         public static FountainView From(Mapping m, HomeSettings s, History h, DateTime now)
         {
             var f = new FountainView { Present = m.HasFountain };
@@ -215,6 +228,14 @@ namespace HallowHome
             bool due; string dt;
             Read.Due(m.Get("fountain.filter"), s.FilterDueDays, out due, out dt); f.FilterDue = due; f.FilterText = dt;
             Read.Due(m.Get("fountain.cleaning"), s.FilterDueDays, out due, out dt); f.CleaningDue = due; f.CleaningText = dt;
+            // 1.2: your own interval when the integration has no filter / cleaning entity (or you chose your own)
+            var fe = m.Get("fountain.filter"); var ce = m.Get("fountain.cleaning");
+            if (f.Present && (s.OwnReminders || fe == null || !fe.Available))
+            { f.Filter = Reminder.Interval("filter", s.FilterEveryDays, s.FilterChangedOn, now, s.FilterDueDays); f.FilterDue = f.Filter.Due; f.FilterText = f.Filter.Text; }
+            else f.Filter = new Reminder { Kind = "filter", Due = f.FilterDue, Text = f.FilterText, Source = "the fountain (Petlibro integration)", Started = true };
+            if (f.Present && (s.OwnReminders || ce == null || !ce.Available))
+            { f.Cleaning = Reminder.Interval("cleaning", s.CleanEveryDays, s.CleanedOn, now, s.FilterDueDays); f.CleaningDue = f.Cleaning.Due; f.CleaningText = f.Cleaning.Text; }
+            else f.Cleaning = new Reminder { Kind = "cleaning", Due = f.CleaningDue, Text = f.CleaningText, Source = "the fountain (Petlibro integration)", Started = true };
             var p = m.Get("fountain.pump"); f.PumpOn = Read.Running(p); if (p != null && p.Available) { f.PumpText = f.PumpOn == true ? "Running" : f.PumpOn == false ? "Stopped" : Read.Nice(p.State); f.PumpSince = p.Changed; }
             var i = m.Get("fountain.intake"); if (i != null && i.Num != null) { f.IntakeToday = i.Num; f.Unit = i.Unit ?? "ml"; }
             if (h != null) f.IntakeAvg = h.Avg7(now.Date);

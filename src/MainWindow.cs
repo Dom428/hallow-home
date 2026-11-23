@@ -23,13 +23,13 @@ namespace HallowHome
         Border content; TextBlock sayText, meter; Button updateBtn; DispatcherTimer sayTimer, rebuildTimer;
         public bool Exiting;
         public static readonly string[][] Pages = {
-            new[] { "dashboard", "Dashboard", "house" }, new[] { "pets", "Pets", "paw" }, new[] { "cameras", "Cameras", "video" }, new[] { "lock", "Lock", "lock" },
+            new[] { "dashboard", "Dashboard", "house" }, new[] { "setup", "Setup", "wand-magic-sparkles" }, new[] { "pets", "Pets", "paw" }, new[] { "cameras", "Cameras", "video" }, new[] { "lock", "Lock", "lock" },
             new[] { "alerts", "Alerts", "bell" }, new[] { "automations", "Automations", "bolt" }, new[] { "devices", "Devices", "list-check" }, new[] { "settings", "Settings", "gear" } };
         public static string PageId(string s)
         {
             var v = (s ?? "").Trim().ToLowerInvariant().Replace(" ", "");
             if (v == "home" || v == "status") v = "dashboard"; if (v == "feeder" || v == "fountain" || v == "pet") v = "pets"; if (v == "camera") v = "cameras";
-            if (v == "alert") v = "alerts"; if (v == "automation" || v == "rules") v = "automations"; if (v == "mapping" || v == "entities") v = "devices"; if (v == "door") v = "lock";
+            if (v == "alert") v = "alerts"; if (v == "automation" || v == "rules") v = "automations"; if (v == "mapping" || v == "entities") v = "devices"; if (v == "door") v = "lock"; if (v == "wizard" || v == "start" || v == "demo") v = "setup";
             return Pages.Any(p => p[0] == v) ? v : null;
         }
 
@@ -43,7 +43,9 @@ namespace HallowHome
             Action changed = () => Dispatcher.BeginInvoke(new Action(SoonRebuild));
             c.Changed += changed;
             Closed += (s, e) => { c.Changed -= changed; StopFeeds(); c.MainClosed(); };
-            StateChanged += (s, e) => { if (WindowState == WindowState.Minimized) StopFeeds(); else BuildPage(); };
+            // 1.2: hidden (to the tray) or minimised = every camera stream and player stops, to save bandwidth; back = they restart
+            StateChanged += (s, e) => SetPaused(WindowState == WindowState.Minimized || !IsVisible);
+            IsVisibleChanged += (s, e) => SetPaused(WindowState == WindowState.Minimized || !IsVisible);
         }
         void SoonRebuild()
         {
@@ -124,6 +126,7 @@ namespace HallowHome
             switch (page)
             {
                 case "pets": el = PetsPage(keep); break;
+                case "setup": el = SetupPage(); break;
                 case "cameras": el = camera != null ? CameraPage(keep) : CamerasPage(keep); break;
                 case "lock": el = LockPage(); break;
                 case "alerts": el = AlertsPage(); break;
@@ -133,6 +136,7 @@ namespace HallowHome
                 default: el = DashboardPage(keep); break;
             }
             foreach (var k in feeds.Keys.Where(k => !keep.Contains(k)).ToList()) { feeds[k].Stop(); feeds.Remove(k); }
+            foreach (var k in players.Keys.Where(k => !keep.Contains(k)).ToList()) { players[k].Stop(); players.Remove(k); }
             var old = content.Child as ScrollViewer; double off = old != null && builtPage == page + camera ? old.VerticalOffset : 0; builtPage = page + camera;
             content.Child = el;
             var sv = el as ScrollViewer; if (sv != null && off > 0) Dispatcher.BeginInvoke(new Action(() => sv.ScrollToVerticalOffset(off)), DispatcherPriority.Loaded);   // a refresh keeps your place
@@ -219,7 +223,8 @@ namespace HallowHome
         }
         FrameworkElement SetupNote(StackPanel sp)
         {
-            if (!c.Configured) { sp.Children.Add(Ui.Note("Hallow Home isn't connected to Home Assistant yet. Set up Home Assistant on your NAS first (NAS-SETUP.md in the download), then paste its address and a long-lived access token on the Settings page.", "Amber", "AmberBg")); sp.Children.Add(Wrap(Ui.Btn("Open Settings", () => Show("settings"), true))); return sp; }
+            if (c.S.Demo) sp.Children.Add(Ui.Note("Demo mode: made-up devices running inside Hallow Home. Nothing reaches your Home Assistant, cameras or feeder, and no alerts are sent. Leave it on the Setup page.", "Lilac", "LilacBg"));
+            if (!c.Configured) { sp.Children.Add(Ui.Note("Hallow Home isn't connected to Home Assistant yet. The Setup page walks you through it (Home Assistant, cameras, Petlibro) and shows what's still missing - or try Demo mode to explore with made-up devices.", "Amber", "AmberBg")); sp.Children.Add(Wrap(Ui.Btn("Open setup", () => Show("setup"), true), Ui.Btn("Try Demo mode", () => { c.SetDemo(true); Show("dashboard"); }))); return sp; }
             if (!c.Connected) sp.Children.Add(Ui.Note(c.Connecting ? "Connecting to Home Assistant…" : "Can't reach Home Assistant: " + (c.LastError ?? "no answer") + " Hallow Home keeps trying.", c.Connecting ? "Lilac" : "Red", c.Connecting ? "LilacBg" : "RedBg"));
             return sp;
         }
@@ -227,10 +232,22 @@ namespace HallowHome
         // ---- camera tiles: Home Assistant's MJPEG proxy (snap: a made-up frame)
         readonly Dictionary<string, CameraFeed> feeds = new Dictionary<string, CameraFeed>();
         readonly Dictionary<string, BitmapSource> lastFrame = new Dictionary<string, BitmapSource>();
-        void StopFeeds() { foreach (var f in feeds.Values) f.Stop(); feeds.Clear(); }
+        readonly Dictionary<string, PlayerView> players = new Dictionary<string, PlayerView>();
+        void StopFeeds() { foreach (var f in feeds.Values) f.Stop(); feeds.Clear(); foreach (var p in players.Values) p.Stop(); players.Clear(); }
+        public int RunningFeeds { get { return feeds.Count(f => !f.Value.Stopped) + players.Count(p => !p.Value.Stopped); } }
+        public IEnumerable<PlayerView> Players { get { return players.Values; } }
+        public IEnumerable<CameraFeed> Feeds { get { return feeds.Values; } }
+        public bool Paused { get; private set; }
+        public void SetPaused(bool p)
+        {
+            if (p == Paused) return; Paused = p;
+            if (p) StopFeeds(); else BuildPage();
+        }
+        static TextBlock Overlay(string text) { return new TextBlock { Text = text, Foreground = Brushes.White, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, Margin = new Thickness(10), IsHitTestVisible = false }; }
+        public PlayerView BigPlayer { get { return players.Where(kv => kv.Key.EndsWith("|big")).Select(kv => kv.Value).FirstOrDefault(); } }
         FrameworkElement Tile(Entity cam, HashSet<string> keep, double height, bool click)
         {
-            var g = new Grid { Height = height, Background = Brushes.Black, ClipToBounds = true };
+            var g = new Grid { Height = height, Background = Brushes.Black, ClipToBounds = true }; bool playerTile = false;
             var img = new Image { Stretch = Stretch.UniformToFill };
             g.Children.Add(img);
             var label = new Border { Background = new SolidColorBrush(Color.FromArgb(150, 0, 0, 0)), Padding = new Thickness(8, 3, 8, 3), VerticalAlignment = VerticalAlignment.Bottom, HorizontalAlignment = HorizontalAlignment.Left,
@@ -247,17 +264,45 @@ namespace HallowHome
                 int n = 0; foreach (var ch in cam.Id) n += ch;
                 img.Source = Mjpeg.Decode(FakeFrames.Jpeg(cam.Label, n % 40));
             }
-            else if (c.Game != null) g.Children.Add(new TextBlock { Text = "Paused while you play", Foreground = Brushes.White, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center });
-            else if (c.Client != null && c.Connected)
+            else if (c.Game != null) g.Children.Add(Overlay("Paused while you play"));
+            else if (Paused) g.Children.Add(Overlay("Paused - the window is hidden"));
+            else
             {
-                BitmapSource last; if (lastFrame.TryGetValue(cam.Id, out last)) img.Source = last;
-                keep.Add(cam.Id);
-                CameraFeed f;
-                if (!feeds.TryGetValue(cam.Id, out f)) { f = new CameraFeed(cam.Id); feeds[cam.Id] = f; f.Start(c.Client, camera != null ? 8 : 3); }
-                var id = cam.Id;
-                f.Frame = bmp => Dispatcher.BeginInvoke(new Action(() => { lastFrame[id] = bmp; img.Source = bmp; }));
+                var kind = c.StreamFor(cam, camera == null);
+                var url = kind == "hls" || kind == "webrtc" ? c.PlayerUrl(kind, cam) : null;
+                if (url != null && Streams.RuntimeVersion() != null)
+                {
+                    // a bridge player (muted until you unmute it on the big view)
+                    var key = cam.Id + "|" + kind + "|" + (camera != null ? "big" : "tile"); keep.Add(key);
+                    PlayerView pv; if (!players.TryGetValue(key, out pv)) { pv = new PlayerView(url, kind); players[key] = pv; }
+                    var old = pv.Parent as Panel; if (old != null) old.Children.Remove(pv);
+                    g.Children.Insert(1, pv); playerTile = true;
+                }
+                else if (kind == "mjpeg" && c.Client != null && c.Connected)
+                {
+                    BitmapSource last; if (lastFrame.TryGetValue(cam.Id, out last)) img.Source = last;
+                    keep.Add(cam.Id);
+                    CameraFeed f;
+                    if (!feeds.TryGetValue(cam.Id, out f)) { f = new CameraFeed(cam.Id); feeds[cam.Id] = f; f.Start(c.Client, camera != null ? 8 : 3); }
+                    var id = cam.Id; var status = Overlay(f.Status == "Live" ? "" : f.Status); status.Visibility = f.Status == "Live" ? Visibility.Collapsed : Visibility.Visible; g.Children.Add(status);
+                    f.Frame = bmp => Dispatcher.BeginInvoke(new Action(() => { lastFrame[id] = bmp; img.Source = bmp; }));
+                    f.StatusChanged += st => Dispatcher.BeginInvoke(new Action(() => { status.Text = st == "Live" ? "" : st; status.Visibility = st == "Live" ? Visibility.Collapsed : Visibility.Visible; }));
+                }
+                else g.Children.Add(Overlay(kind == null ? "No picture source yet - connect Home Assistant or the bridge (Setup)" : "The bridge's players need Microsoft Edge WebView2"));
             }
-            var b = new Border { Child = g, BorderBrush = Ui.R("Line"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3) };
+            UIElement inner = g;
+            if (playerTile)
+            {
+                // a browser control always draws on top (WPF's airspace rule): the name and the click target go in a bar under it
+                g.Children.Remove(label); g.Height = Math.Max(60, height - 26);
+                var dp = new DockPanel();
+                var cap = new DockPanel { Background = new SolidColorBrush(Color.FromRgb(16, 16, 20)), Height = 26 };
+                var src = new TextBlock { Text = (Streams.Label(c.StreamFor(cam, camera == null)) + (camera == null ? " · muted" : "")), Foreground = new SolidColorBrush(Color.FromRgb(190, 190, 200)), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+                DockPanel.SetDock(src, Dock.Right); cap.Children.Add(src);
+                cap.Children.Add(new TextBlock { Text = cam.Label, Foreground = Brushes.White, FontSize = 12, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) });
+                DockPanel.SetDock(cap, Dock.Bottom); dp.Children.Add(cap); dp.Children.Add(g); inner = dp;
+            }
+            var b = new Border { Child = inner, BorderBrush = Ui.R("Line"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3) };
             if (click) { b.Cursor = System.Windows.Input.Cursors.Hand; b.ToolTip = "Open " + cam.Label; var id2 = cam.Id; b.MouseLeftButtonUp += (s, e) => ShowCamera(id2); }
             return b;
         }
@@ -304,7 +349,8 @@ namespace HallowHome
             sp.Children.Add(Head("bowl-food", "Feeder", "Petlibro Granary (community integration)", !f.Online ? "Red" : f.Jam || c.Active.Any(a => a.Rule == "jam") ? "Red|Needs a look" : f.FoodLow ? "Amber|Needs a look" : "Green"));
             var nx = f.Next == null ? "-" : Fmt.Clock(f.Next, c.Now()) + (f.NextGrams != null ? " (" + Read.Num(f.NextGrams.Value) + " g)" : "");
             sp.Children.Add(KV("Next meal", nx, null, null, 110));
-            sp.Children.Add(KV("Today", (f.TodayMeals != null ? f.TodayMeals + " meal" + (f.TodayMeals == 1 ? "" : "s") : "-") + (f.TodayGrams != null ? " · " + Read.Num(f.TodayGrams.Value) + " g" : ""), null, null, 110));
+            sp.Children.Add(KV("Fed today", f.FedTodayText(c.S.GramsPerPortion), null, null, 110));
+            if (f.PlannedGrams != null && f.TodayGrams != null) sp.Children.Add(KV("", Bar(100.0 * f.TodayGrams.Value / Math.Max(1, f.PlannedGrams.Value), "Green"), 110));
             sp.Children.Add(KV("Food", f.FoodText ?? "-", f.FoodLow ? "low - top it up" : null, f.FoodLow ? "Red" : null, 110));
             if (f.FoodPct != null) sp.Children.Add(KV("", Bar(f.FoodPct, f.FoodLow ? "Red" : "Green"), 110));
             if (full)
@@ -358,7 +404,8 @@ namespace HallowHome
             var feederCol = new StackPanel(); feederCol.Children.Add(FeederCard(true));
             if (c.Feeder.Camera != null) { var t = Tile(c.Feeder.Camera, keep, 220, true); t.Margin = new Thickness(0, 12, 0, 0); feederCol.Children.Add(t); }
             var fountainCol = new StackPanel(); fountainCol.Children.Add(FountainCard(true));
-            if (c.Fountain.Present) { var ch = IntakeChart(); ch.Margin = new Thickness(0, 12, 0, 0); fountainCol.Children.Add(ch); }
+            if (c.Feeder.Present) { var sc = ScheduleCard(); sc.Margin = new Thickness(0, 12, 0, 0); feederCol.Children.Add(sc); }
+            if (c.Fountain.Present) { var rc = RemindersCard(); rc.Margin = new Thickness(0, 12, 0, 0); fountainCol.Children.Add(rc); var ch = IntakeChart(); ch.Margin = new Thickness(0, 12, 0, 0); fountainCol.Children.Add(ch); }
             sp.Children.Add(Columns(2, feederCol, fountainCol));
             sp.Children.Add(Ui.Muted("The water-intake hint compares today with your cat's own last 7 days. It's a nudge to keep an eye on them, not medical advice - call your vet if you're worried.", 11.5, 0));
             return Scroll(sp);
@@ -367,7 +414,7 @@ namespace HallowHome
         {
             var sp = new StackPanel(); sp.Children.Add(Ui.Caps("Water intake, last 8 days", 10.5));
             var now = c.Now(); var days = Enumerable.Range(0, 8).Select(i => now.Date.AddDays(i - 7)).ToList();
-            var vals = days.Select(d => { double v; if (d == now.Date && c.Fountain.IntakeToday != null) return c.Fountain.IntakeToday; return c.Hist.Intake.TryGetValue(History.Day(d), out v) ? v : (double?)null; }).ToList();
+            var vals = days.Select(d => { double v; if (d == now.Date && c.Fountain.IntakeToday != null) return c.Fountain.IntakeToday; return c.ShownHist.Intake.TryGetValue(History.Day(d), out v) ? v : (double?)null; }).ToList();
             var max = Math.Max(0.1, vals.Where(v => v != null).Select(v => v.Value).DefaultIfEmpty(1).Max());
             var g = new Grid { Height = 110, Margin = new Thickness(0, 10, 0, 0) };
             for (int i = 0; i < 8; i++)
@@ -384,21 +431,114 @@ namespace HallowHome
             return Ui.Card(sp);
         }
 
-        // ================= Cameras
+        // ---- 1.2: the feeder's own schedule (read from Home Assistant; changed through the integration's services, after a confirm)
+        Border ScheduleCard()
+        {
+            var v = c.Feeder.Schedule; var sp = new StackPanel();
+            sp.Children.Add(Head("calendar-days", "Feeding schedule", "The feeder's own plan, read from Home Assistant", null));
+            if (!v.Present) { sp.Children.Add(Ui.Muted("No feeding schedule found. Newer versions of the community Petlibro integration list the feeder's plan on a \"Feeding schedule\" sensor - update it in HACS, or map the sensor on the Devices page.", 12)); return Ui.Card(sp); }
+            if (!v.On) sp.Children.Add(Ui.Note("The feeder's schedule is switched off: no scheduled meals dispense.", "Amber", "AmberBg"));
+            bool edit = c.ScheduleEditable == true && c.Connected;
+            if (!edit) sp.Children.Add(Ui.Muted(c.ScheduleEditable == false ? "Read-only: the Petlibro integration in your Home Assistant doesn't offer schedule changes (newer versions do - update it in HACS). Change meals in the Petlibro app meanwhile." : "Read-only for now: Hallow Home couldn't ask Home Assistant which services it has.", 11.5, 6));
+            if (v.Plans.Count == 0) sp.Children.Add(Ui.Muted("No meals scheduled.", 12));
+            foreach (var p in v.Plans)
+            {
+                var pp = p; var d = new DockPanel { Margin = new Thickness(0, 5, 0, 1) };
+                StackPanel btns = null;
+                if (edit)
+                {
+                    btns = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(54, 2, 0, 4) };
+                    btns.Children.Add(Ui.Btn("Edit", () => AskPlan(pp)));
+                    btns.Children.Add(Ui.Btn(pp.Enabled ? "Turn off" : "Turn on", () => ConfirmPlan(new PlanEdit { Kind = "toggle", PlanId = pp.Id, Enable = !pp.Enabled })));
+                    btns.Children.Add(Ui.Btn("Delete", () => ConfirmPlan(new PlanEdit { Kind = "delete", PlanId = pp.Id })));
+                }
+                if (p.Today && p.Enabled && p.State != null)
+                {
+                    var st = p.State == "dispensed" ? Ui.Pill("Fed", "Green", "GreenBg") : p.State == "skipped" || p.State == "to_be_skipped" ? Ui.Pill("Skipped", "Amber", "AmberBg") : Ui.Pill("Today", "Lilac", "LilacBg");
+                    st.Margin = new Thickness(0, 0, 8, 0); DockPanel.SetDock(st, Dock.Right); d.Children.Add(st);
+                }
+                var t = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+                t.Inlines.Add(new System.Windows.Documents.Run(p.Time + "  ") { FontFamily = Ui.Mono, FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Ui.R(p.Enabled ? "Text" : "Faint") });
+                t.Inlines.Add(new System.Windows.Documents.Run((p.Label.Length > 0 ? p.Label + " · " : "") + p.Portions + " portion" + (p.Portions == 1 ? "" : "s") + " (" + Read.Num(p.GramsOr(c.S.GramsPerPortion)) + " g) · " + p.DaysText + (p.Enabled ? "" : " · off")) { FontSize = 12, Foreground = Ui.R(p.Enabled ? "TextSoft" : "Faint") });
+                d.Children.Add(t); sp.Children.Add(d); if (btns != null) sp.Children.Add(btns);
+            }
+            if (edit) { var add = Ui.Btn("Add a meal", () => AskPlan(null)); add.HorizontalAlignment = HorizontalAlignment.Left; add.Margin = new Thickness(0, 8, 0, 0); sp.Children.Add(add); }
+            sp.Children.Add(Ui.Muted(edit ? "Changes go to the feeder through the Petlibro integration in Home Assistant - each one only after you confirm it." : "Hallow Home shows the plan the feeder follows; it can't change it here.", 11.5, 0));
+            return Ui.Card(sp);
+        }
+        void AskPlan(FeedPlan p)
+        {
+            var e = Dialogs.AskPlan(this, c, p); if (e == null) return;
+            ConfirmPlan(e);
+        }
+        public void ConfirmPlan(PlanEdit e)
+        {
+            var err = Schedule.Check(e, c.Feeder.Schedule, 48); if (err != null) { Say(err); return; }
+            string title; var text = Schedule.Describe(e, c.Feeder.Schedule, c.S.GramsPerPortion, out title);
+            if (!Dialogs.Confirm(this, title, text, e.Kind == "delete" ? "Delete" : e.Kind == "add" ? "Add" : "Change", e.Kind == "delete")) { Say("Nothing changed."); return; }
+            var r = c.ScheduleChange(e, true, x => Say(x == null ? "Sent to the feeder - the schedule updates in a moment." : "Couldn't change it: " + x));
+            if (r != null) Say(r);
+        }
+        // ---- 1.2: the fountain's reminders (the integration's days left, or your own interval) and the low-water alert
+        Border RemindersCard()
+        {
+            var w = c.Fountain; var sp = new StackPanel();
+            sp.Children.Add(Head("filter", "Reminders", "Filter, cleaning and water", null));
+            foreach (var r in new[] { w.Filter, w.Cleaning })
+            {
+                var rr = r; var d = new DockPanel { Margin = new Thickness(0, 3, 0, 3) };
+                if (r.Own) { var b = Ui.Btn(r.Kind == "filter" ? "Changed the filter today" : "Cleaned it today", () => { c.MarkDone(rr.Kind); Say(rr.Kind == "filter" ? "Filter reminder restarted - next in " + c.S.FilterEveryDays + " days." : "Cleaning reminder restarted - next in " + c.S.CleanEveryDays + " days."); }); DockPanel.SetDock(b, Dock.Right); d.Children.Add(b); }
+                var t = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+                t.Inlines.Add(new System.Windows.Documents.Run((r.Kind == "filter" ? "Filter" : "Cleaning") + "  ") { FontSize = 12.5, Foreground = Ui.R("Muted") });
+                t.Inlines.Add(new System.Windows.Documents.Run(r.Text ?? "-") { FontFamily = Ui.Mono, FontSize = 12.5, Foreground = Ui.R(r.Due ? "Amber" : "Text") });
+                t.Inlines.Add(new System.Windows.Documents.Run("   " + (r.Source ?? "")) { FontSize = 11.5, Foreground = Ui.R("Muted") });
+                d.Children.Add(t); sp.Children.Add(d);
+            }
+            var on = c.S.RuleOn("water-low");
+            sp.Children.Add(KV("Low water", on ? "alert under " + c.S.WaterLowPct + "%" : "alert off", w.WaterLow ? "low now" : w.WaterText != null ? "now " + w.WaterText : null, w.WaterLow ? "Red" : null, 110));
+            sp.Children.Add(Ui.Muted(w.Filter.Own || w.Cleaning.Own ? "Your own intervals (Settings > Pets) count from the day you press the button." : "From the fountain's own counters: reset them in the Petlibro app (or Home Assistant's reset buttons) after a change.", 11.5, 0));
+            return Ui.Card(sp);
+        }
+
+        // ================= Cameras (1.2: 2x2 / 3x3 grid with pages, the source the bridge offers, full screen, mute)
+        int gridPage;
         FrameworkElement CamerasPage(HashSet<string> keep)
         {
-            var sp = PageBody("Cameras", "Live from Home Assistant's camera proxy while this page is open (paused during games). Click one for the big view, a snapshot and the live player.");
+            bigFor = null;   // the big view starts muted again next time
+            var sp = PageBody("Cameras", "Live while this page is open; paused while you play, and when the window is hidden or minimised. Click one for the big view, full screen, a snapshot and sound.");
             SetupNote(sp);
-            if (c.Map.Cameras.Count == 0) sp.Children.Add(Ui.Muted("No camera entities in Home Assistant yet. docker-wyze-bridge serves your Wyze cameras as RTSP / WebRTC / HLS; add each to HA (NAS-SETUP.md).", 12.5));
+            var cams = c.Map.Cameras;
+            if (cams.Count == 0) sp.Children.Add(Ui.Muted("No camera entities in Home Assistant yet. docker-wyze-bridge serves your Wyze cameras as RTSP / WebRTC / HLS; add each to HA (the Setup page, step 2).", 12.5));
             else
             {
-                var online = c.Map.Cameras.Count(x => x.Available);
-                sp.Children.Add(Ui.Muted(online + " of " + c.Map.Cameras.Count + " online", 12, 8));
-                sp.Children.Add(Columns(c.Map.Cameras.Count <= 4 ? 2 : 3, c.Map.Cameras.Select(cam => (UIElement)Tile(cam, keep, c.Map.Cameras.Count <= 4 ? 250 : 190, true)).ToArray()));
+                int n = c.S.GridSize == 3 ? 3 : 2, per = n * n, pages = (cams.Count + per - 1) / per;
+                if (gridPage >= pages) gridPage = pages - 1; if (gridPage < 0) gridPage = 0;
+                var online = cams.Count(x => x.Available);
+                var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
+                var chips = new StackPanel { Orientation = Orientation.Horizontal };
+                chips.Children.Add(Chip("2×2", n == 2, () => { c.S.GridSize = 2; c.S.Save(); gridPage = 0; BuildPage(); }));
+                chips.Children.Add(Chip("3×3", n == 3, () => { c.S.GridSize = 3; c.S.Save(); gridPage = 0; BuildPage(); }));
+                if (pages > 1)
+                {
+                    var prev = Ui.Btn("Previous", () => { gridPage--; BuildPage(); }); prev.IsEnabled = gridPage > 0;
+                    var next = Ui.Btn("Next", () => { gridPage++; BuildPage(); }); next.IsEnabled = gridPage < pages - 1;
+                    chips.Children.Add(new Border { Width = 10 }); chips.Children.Add(prev); chips.Children.Add(Ui.Muted((gridPage + 1) + " / " + pages + "  ", 12)); chips.Children.Add(next);
+                }
+                DockPanel.SetDock(chips, Dock.Left); bar.Children.Add(chips);
+                var info = Ui.Muted(online + " of " + cams.Count + " online · " + SourceSummary(), 12); info.VerticalAlignment = VerticalAlignment.Center; DockPanel.SetDock(info, Dock.Right); bar.Children.Add(info);
+                sp.Children.Add(bar);
+                var shown = cams.Skip(gridPage * per).Take(per).ToList();
+                double h = n == 2 ? 250 : 165;
+                sp.Children.Add(Columns(n, shown.Select(cam => (UIElement)Tile(cam, keep, h, true)).ToArray()));
             }
             sp.Children.Add(Section("Recordings"));
             sp.Children.Add(RecordingsBlock());
             return Scroll(sp);
+        }
+        string SourceSummary()
+        {
+            var g = c.StreamFor(null, true); var big = c.StreamFor(null, false);
+            return "grid: " + Streams.Label(g) + (big != g ? ", big view: " + Streams.Label(big) : "") + (c.S.StreamMode == "auto" ? " (auto)" : "");
         }
         FrameworkElement RecordingsBlock()
         {
@@ -424,34 +564,34 @@ namespace HallowHome
             }
             return sp;
         }
+        bool bigMuted = true;   // the big view's sound: muted each time it opens
+        string bigFor;
         FrameworkElement CameraPage(HashSet<string> keep)
         {
             Entity cam; c.Entities.TryGetValue(camera, out cam);
             if (cam == null) { camera = null; return CamerasPage(keep); }
-            var sp = PageBody(cam.Label, cam.Available ? "Live from Home Assistant's camera proxy." : "Offline since " + Fmt.Clock(cam.Changed, c.Now()) + ".");
+            if (bigFor != camera) { bigFor = camera; bigMuted = true; }
+            var kind = c.StreamFor(cam, false);
+            var sp = PageBody(cam.Label, cam.Available ? "Live: " + Streams.Label(kind) + "." : "Offline since " + Fmt.Clock(cam.Changed, c.Now()) + ".");
             sp.Children.Add(Tile(cam, keep, 470, false));
-            var live = Ui.Btn("Live view", () => OpenLive(cam), true); live.IsEnabled = cam.Available && c.S.LiveBase != null;
-            live.ToolTip = c.S.LiveBase == null ? "Set the docker-wyze-bridge WebRTC / HLS address in Settings first." : "Opens " + Cams.LiveUrl(c.S.LiveBase, cam);
-            var snap = Ui.Btn("Snapshot", () => SaveSnapshot(cam)); snap.IsEnabled = cam.Available && c.Connected;
-            var row = Wrap(Ui.Btn("All cameras", () => { camera = null; BuildPage(); }), snap, live); row.Margin = new Thickness(0, 12, 0, 0); sp.Children.Add(row);
-            sp.Children.Add(Ui.Muted(c.S.LiveBase == null ? "Live view (WebRTC / HLS, smoother and with sound) uses docker-wyze-bridge's own player - set its address in Settings." : "Live view opens docker-wyze-bridge's player for \"" + Cams.BridgeName(cam) + "\" in a WebView2 window. Snapshots go to Pictures\\Hallow Home.", 12, 0));
+            var pv = BigPlayer; if (pv != null) pv.SetMuted(bigMuted);
+            var full = Ui.Btn("Full screen", () => OpenFull(cam), true); full.IsEnabled = cam.Available && kind != null;
+            var snap = Ui.Btn("Snapshot", () => SaveSnapshot(cam)); snap.IsEnabled = cam.Available && (c.Connected || pv != null);
+            var mute = Ui.Btn(bigMuted ? "Unmute" : "Mute", () => { bigMuted = !bigMuted; var p = BigPlayer; if (p != null) p.SetMuted(bigMuted); BuildPage(); });
+            mute.IsEnabled = pv != null; mute.ToolTip = pv != null ? (bigMuted ? "Muted - click for the camera's sound" : "Sound on") : "MJPEG pictures have no sound - the bridge's WebRTC / HLS players do (Settings > Cameras)";
+            var row = Wrap(Ui.Btn("All cameras", () => { camera = null; BuildPage(); }), full, snap, mute); row.Margin = new Thickness(0, 12, 0, 0); sp.Children.Add(row);
+            sp.Children.Add(Ui.Muted("Snapshots go to Pictures\\Hallow Home. Sound starts muted every time. " + (c.BridgeWebRtc == null && c.BridgeHls == null ? "With docker-wyze-bridge's address (Setup, step 2) you get its WebRTC / HLS players - smoother, and with sound." : "Stream: " + SourceSummary() + "."), 12, 0));
             return Scroll(sp);
         }
-        void OpenLive(Entity cam)
+        public FullView OpenFull(Entity cam, bool show = true)
         {
-            var url = Cams.LiveUrl(c.S.LiveBase, cam); if (url == null) return;
-            if (CameraWindow.RuntimeVersion() == null) { Dialogs.Info(this, "The live view needs Microsoft Edge WebView2", "Windows 11 has it built in; on Windows 10 install \"Microsoft Edge WebView2 Runtime\" from Microsoft. The camera grid works without it."); return; }
-            var w = new CameraWindow(cam.Label, url) { Owner = this }; w.Show();
+            var kind = c.StreamFor(cam, false); if (kind == null) { Say("Nothing can play this camera right now."); return null; }
+            StopFeeds();   // the big view's stream gives way to the full-screen one
+            var w = new FullView(c, cam, kind, c.PlayerUrl(kind, cam), show);
+            if (show) { w.Owner = this; w.Closed += (s, e) => BuildPage(); w.Show(); }
+            return w;
         }
-        void SaveSnapshot(Entity cam)
-        {
-            var h = c.Client; if (h == null) return; Say("Taking a snapshot…");
-            ThreadPool.QueueUserWorkItem(_ =>
-            {
-                string msg; try { var f = Cams.SaveSnapshot(cam.Label, h.Snapshot(cam.Id)); msg = "Saved " + Path.GetFileName(f) + " in Pictures\\Hallow Home."; } catch (Exception e) { msg = "Snapshot failed: " + e.Message; }
-                Dispatcher.BeginInvoke(new Action(() => Say(msg)));
-            });
-        }
+        void SaveSnapshot(Entity cam) { Say("Taking a snapshot…"); c.Snapshot(cam, BigPlayer, msg => Say(msg)); }
 
         // ================= Lock
         FrameworkElement LockPage()
@@ -489,7 +629,7 @@ namespace HallowHome
             else { var l = new StackPanel(); foreach (var a in c.Active) l.Children.Add(AlertRow(a)); sp.Children.Add(Ui.Card(l)); }
             var snoozed = c.SnoozeUntil;
             var tools = Wrap(snoozed == null ? Ui.Btn("Pause alerts for 1 hour", () => c.Snooze(true)) : Ui.Btn("Resume alerts", () => c.Snooze(false)),
-                Ui.Btn("Send a test alert", () => { c.Deliver("Hallow Home test", "This is a test alert from Hallow Home. If you see it, alerts reach you here.", true, true, false); Say("Test alert sent to the channels that are on."); }));
+                Ui.Btn("Send a test alert", () => { c.Deliver("Hallow Home test", "This is a test alert from Hallow Home. If you see it, alerts reach you here.", true, true, false, true); Say("Test alert sent to the channels that are on."); }));
             sp.Children.Add(tools);
             if (snoozed != null) sp.Children.Add(Ui.Muted("Paused until " + snoozed.Value.ToString("HH:mm") + " - alerts that are still true then go out.", 12, 0));
             sp.Children.Add(Section("Sent recently"));
@@ -617,6 +757,148 @@ namespace HallowHome
             m.IsOpen = true;
         }
 
+        // ================= Setup (1.2): the guided setup - three skippable steps that show what's still missing, and Demo mode
+        string wizUrl, wizUrlResult, wizTokenResult; bool wizUrlOk, wizBusy; string wizTz; bool? wizTokenOk;
+        FrameworkElement SetupPage()
+        {
+            var sp = PageBody("Setup", "Three steps that get Hallow Home talking to Home Assistant on your NAS. Each can be skipped and comes back later; the list shows what's still missing. Nothing here changes the NAS - you do that part, with the exact clicks below.");
+            var demo = new StackPanel();
+            demo.Children.Add(Head("flask", "Demo mode", "Explore Hallow Home now, with made-up devices", c.S.Demo ? "Lilac|On" : null));
+            demo.Children.Add(Ui.Muted("A pretend feeder, fountain and four cameras run inside Hallow Home on this PC (localhost only). Nothing reaches your Home Assistant, cameras, feeder or accounts, and no alerts are sent. Your settings and token stay as they are.", 12, 8));
+            demo.Children.Add(Wrap(c.S.Demo ? Ui.Btn("Leave Demo mode", () => { c.SetDemo(false); Say("Demo mode off."); BuildPage(); }, true) : Ui.Btn("Try Demo mode", () => { c.SetDemo(true); Say("Demo mode on - made-up devices."); BuildPage(); }, true)));
+            var dc = Ui.Card(demo); dc.Margin = new Thickness(0, 0, 0, 14); sp.Children.Add(dc);
+
+            var steps = Wizard.Steps(c);
+            var list = new StackPanel();
+            foreach (var s in steps)
+            {
+                var d = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+                var ic = Icons.Make(s.Done ? "circle-check" : "circle", 14, Ui.R(s.Done ? "Green" : s.Skipped ? "Faint" : "Amber")); ic.Margin = new Thickness(0, 2, 10, 0); ic.VerticalAlignment = VerticalAlignment.Top; d.Children.Add(ic);
+                d.Children.Add(Ui.T(s.Title + ": " + (s.Done ? "done" : (s.Skipped ? "skipped - " : "") + "still missing " + string.Join("; ", s.Missing)), 12.5, false, Ui.R(s.Done ? "Text" : "TextSoft")));
+                list.Children.Add(d);
+            }
+            sp.Children.Add(Ui.Card(list));
+            for (int i = 0; i < steps.Count; i++)
+            {
+                var s = steps[i]; sp.Children.Add(Section("Step " + (i + 1) + " · " + s.Title));
+                if (s.Skipped)
+                {
+                    var id = s.Id; sp.Children.Add(Ui.Muted("Skipped. Still missing: " + string.Join("; ", s.Missing) + ".", 12.5, 4));
+                    sp.Children.Add(Wrap(Ui.Btn("Show this step", () => { c.S.WizardSkipped.Remove(id); c.S.Save(); BuildPage(); })));
+                    continue;
+                }
+                sp.Children.Add(s.Id == "ha" ? StepHa(s) : s.Id == "cameras" ? StepCameras(s) : StepPetlibro(s));
+                if (!s.Done) { var id = s.Id; var sk = Ui.Btn("Skip this step", () => { if (!c.S.WizardSkipped.Contains(id)) c.S.WizardSkipped.Add(id); c.S.Save(); BuildPage(); }); sk.HorizontalAlignment = HorizontalAlignment.Left; sk.Margin = new Thickness(0, 8, 0, 0); sp.Children.Add(sk); }
+            }
+            return Scroll(sp);
+        }
+        static UIElement Numbered(IEnumerable<string> lines)
+        {
+            var sp = new StackPanel(); int n = 0;
+            foreach (var l in lines)
+            {
+                var sub = l.StartsWith("    "); if (!sub) n++;
+                var d = new DockPanel { Margin = new Thickness(sub ? 22 : 0, 2, 0, 2) };
+                var num = Ui.T(sub ? "" : n + ".", 12.5, true, Ui.R("Lilac")); num.Width = 22; d.Children.Add(num);
+                var t = Ui.T(l.Trim(), 12.5, false, Ui.R("TextSoft")); if (sub) t.FontFamily = Ui.Mono; d.Children.Add(t);
+                sp.Children.Add(d);
+            }
+            return sp;
+        }
+        UIElement StepHa(WizStep s)
+        {
+            var sp = new StackPanel();
+            if (c.S.Demo) sp.Children.Add(Ui.Muted("Demo mode is on: this step talks to the real Home Assistant you type in - leave Demo mode afterwards to use it.", 11.5, 6));
+            sp.Children.Add(Ui.Muted("a) Paste Home Assistant's address and test it - no token needed yet.", 12.5, 4));
+            var url = Ui.Field(wizUrl ?? c.S.HaUrl ?? "http://nas:8123", 320);
+            var test = Ui.Btn("Test connection", null);
+            test.Click += (o, e) =>
+            {
+                wizUrl = url.Text; var u = url.Text; wizBusy = true; wizUrlResult = "Testing…"; BuildPage();
+                ThreadPool.QueueUserWorkItem(_ => { string r; bool ok; try { r = Ha.Probe(u); ok = true; } catch (Exception x) { r = x.Message; ok = false; } Dispatcher.BeginInvoke(new Action(() => { wizBusy = false; wizUrlOk = ok; wizUrlResult = r; BuildPage(); })); });
+            };
+            test.IsEnabled = !wizBusy;
+            sp.Children.Add(Wrap(url, new Border { Width = 8 }, test));
+            if (wizUrlResult != null) sp.Children.Add(Ui.T(wizUrlResult, 12.5, false, Ui.R(wizBusy ? "Muted" : wizUrlOk ? "Green" : "Red"), 4));
+            if (Ha.InsecureRemote(Ha.NormalizeUrl(url.Text))) sp.Children.Add(Ui.Note("That address is plain http over the internet: the token would travel unencrypted. Use your home network's address (or Tailscale), or https.", "Red", "RedBg"));
+            sp.Children.Add(Ui.Muted("b) Make a long-lived access token in Home Assistant - the exact clicks:", 12.5, 4));
+            sp.Children.Add(Numbered(Wizard.TokenSteps));
+            var hu = Ha.NormalizeUrl(url.Text);
+            if (hu != null) { var open = Ui.Btn("Open Home Assistant's profile page", () => { try { Process.Start(new ProcessStartInfo(hu + "/profile/security") { UseShellExecute = true }); } catch { } }); open.HorizontalAlignment = HorizontalAlignment.Left; open.Margin = new Thickness(22, 4, 0, 6); sp.Children.Add(open); }
+            sp.Children.Add(Ui.Muted("c) Paste the token and test again. It's kept encrypted for your Windows user only, never shown or logged.", 12.5, 4));
+            var tok = new PasswordBox { Width = 320, MinHeight = 30, Padding = new Thickness(8, 5, 8, 5), Background = Ui.R("Well"), Foreground = Ui.R("Text"), BorderBrush = Ui.R("Line"), CaretBrush = Ui.R("AccentBrush"), FontFamily = Ui.Mono };
+            var again = Ui.Btn("Test again", null);
+            again.Click += (o, e) =>
+            {
+                var u = url.Text; var t = tok.Password; tok.Clear();
+                if (t.Length == 0 && !SecretStore.Has(SecretStore.Token)) { wizTokenOk = false; wizTokenResult = "Paste the token first."; BuildPage(); return; }
+                var tokenToTest = t.Length > 0 ? t : SecretStore.Get(SecretStore.Token);
+                wizBusy = true; wizTokenResult = "Testing…"; wizTokenOk = null; BuildPage();
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    string r; bool ok; WizardResult(u, tokenToTest, out r, out ok);
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        wizBusy = false; wizTokenOk = ok; wizTokenResult = r;
+                        if (ok) { var err = c.SetConnection(u, t.Length > 0 ? t : null); if (err != null) { wizTokenOk = false; wizTokenResult = err; } else wizTokenResult += c.S.Demo ? " Saved - leave Demo mode to use it." : " Saved."; }
+                        BuildPage();
+                    }));
+                });
+            };
+            again.IsEnabled = !wizBusy;
+            sp.Children.Add(Wrap(tok, new Border { Width = 8 }, again));
+            if (wizTokenResult != null) sp.Children.Add(Ui.T(wizTokenResult, 12.5, false, Ui.R(wizTokenOk == true ? "Green" : wizTokenOk == false ? "Red" : "Muted"), 4));
+            else if (s.Done) sp.Children.Add(Ui.T("Connected" + (c.HaVersion != null ? " to Home Assistant " + c.HaVersion : "") + ".", 12.5, false, Ui.R("Green"), 4));
+            return Ui.Card(sp);
+        }
+        // the wizard's second test: the token works, and what Home Assistant has (feeder, fountain, cameras)
+        public static void WizardResult(string url, string token, out string text, out bool ok)
+        {
+            try
+            {
+                var h = new Ha(url, token); h.Check(); var ver = h.Version(); var n = h.States(); var m = Roles.Build(n, null);
+                text = "Connected to Home Assistant" + (ver != null ? " " + ver : "") + ": " + n.Count + " entities - " + (m.HasFeeder ? "feeder found" : "no feeder yet") + ", " + (m.HasFountain ? "fountain found" : "no fountain yet") + ", " + m.Cameras.Count + " camera" + (m.Cameras.Count == 1 ? "" : "s") + ".";
+                ok = true;
+            }
+            catch (Exception x) { text = x.Message; ok = false; }
+        }
+        UIElement StepCameras(WizStep s)
+        {
+            var sp = new StackPanel(); var host = Wizard.NasHost(c.S.HaUrl);
+            sp.Children.Add(Ui.Muted("docker-wyze-bridge turns each Wyze camera into streams on the NAS. This makes its docker-compose snippet for Synology Container Manager. The <REPLACE...> lines are for the NAS only: Hallow Home never asks for your Wyze password or API keys.", 12.5, 8));
+            var folder = Ui.Field(c.S.NasFolder, 300);
+            if (wizTz == null) wizTz = Wizard.IanaZone(TimeZoneInfo.Local.Id) ?? "";
+            var tz = Ui.Field(wizTz, 200);
+            sp.Children.Add(KV("Folder on the NAS", folder, 150)); sp.Children.Add(KV("Time zone", tz, 150));
+            sp.Children.Add(Ui.Switch("Record every camera on the NAS (RECORD_ALL - uses disk)", c.S.BridgeRecord, on => { c.S.BridgeRecord = on; c.S.Save(); BuildPage(); }));
+            var o = new Wizard.ComposeOptions { Folder = c.S.NasFolder, Tz = wizTz.Length > 0 ? wizTz : null, Record = c.S.BridgeRecord, NasHost = host };
+            var yaml = Wizard.Compose(o);
+            var box = new TextBox { Text = yaml, IsReadOnly = true, FontFamily = Ui.Mono, FontSize = 11.5, TextWrapping = TextWrapping.NoWrap, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, Background = Ui.R("Well"), Foreground = Ui.R("Text"), BorderBrush = Ui.R("Line"), Padding = new Thickness(10), Margin = new Thickness(0, 8, 0, 6), MaxHeight = 380, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            sp.Children.Add(box);
+            sp.Children.Add(Wrap(Ui.Btn("Copy", () => { try { Clipboard.SetText(yaml.Replace("\n", "\r\n")); Say("Copied - paste it in Container Manager (Project > Create)."); } catch { Say("Couldn't reach the clipboard - select the text and copy it."); } }, true),
+                Ui.Btn("Update the snippet", () => { var f = folder.Text.Trim(); c.S.NasFolder = f; c.S.Fix(); c.S.Save(); wizTz = tz.Text.Trim(); if (c.S.NasFolder != f.TrimEnd('/')) Say("The folder should look like /volume1/docker/wyze-bridge."); BuildPage(); })));
+            sp.Children.Add(Ui.Muted("Then:", 12.5, 2)); sp.Children.Add(Numbered(Wizard.CameraSteps(host)));
+            sp.Children.Add(Ui.Muted("The bridge's players for Hallow Home (filled in from the NAS's name; change them if yours differ):", 12.5, 4));
+            var rtc = Ui.Field(c.S.BridgeWebRtc ?? "http://" + host + ":8889", 260); var hls = Ui.Field(c.S.BridgeHls ?? "http://" + host + ":8888", 260);
+            sp.Children.Add(KV("WebRTC", rtc, 150)); sp.Children.Add(KV("HLS", hls, 150));
+            sp.Children.Add(Wrap(Ui.Btn("Test the bridge", () => { c.S.BridgeWebRtc = rtc.Text; c.S.BridgeHls = hls.Text; c.S.Fix(); c.S.Save(); Say("Asking the bridge…"); c.ProbeBridge(() => { Say(c.BridgeWebRtcOk == true || c.BridgeHlsOk == true ? "The bridge answered." : "No answer from the bridge yet (is it running, and is there a camera in Home Assistant?)."); BuildPage(); }); BuildPage(); })));
+            if (c.BridgeProbing) sp.Children.Add(Ui.Muted("Asking the bridge…", 12, 0));
+            else if (c.BridgeWebRtcOk != null || c.BridgeHlsOk != null) sp.Children.Add(Ui.T("WebRTC: " + (c.BridgeWebRtcOk == true ? "yes" : "no") + "   HLS: " + (c.BridgeHlsOk == true ? "yes" : "no") + (c.S.Demo ? "   (Demo mode: the made-up bridge)" : ""), 12.5, false, Ui.R(c.BridgeWebRtcOk == true || c.BridgeHlsOk == true ? "Green" : "Red"), 4));
+            return Ui.Card(sp);
+        }
+        UIElement StepPetlibro(WizStep s)
+        {
+            var sp = new StackPanel();
+            sp.Children.Add(Ui.Muted("The feeder and the fountain come into Home Assistant through the community Petlibro integration (HACS - unofficial, not made by Petlibro):", 12.5, 6));
+            sp.Children.Add(Numbered(Wizard.PetlibroSteps));
+            sp.Children.Add(Wrap(Ui.Btn("Copy the repository address", () => { try { Clipboard.SetText(Wizard.PetlibroRepo); Say("Copied " + Wizard.PetlibroRepo); } catch { } })));
+            var found = new List<string>();
+            found.Add(c.Feeder.Present ? "feeder found" : "no feeder yet"); found.Add(c.Fountain.Present ? "fountain found" : "no fountain yet");
+            if (c.Feeder.Present) found.Add(c.Feeder.Schedule.Present ? "feeding schedule found (" + c.Feeder.Schedule.Plans.Count + " meals" + (c.ScheduleEditable == true ? ", editable" : c.ScheduleEditable == false ? ", read-only" : "") + ")" : "no feeding schedule sensor");
+            sp.Children.Add(Ui.T(c.Connected ? "In Home Assistant now: " + string.Join(", ", found) + "." : "Connect Home Assistant (step 1) to see what it found.", 12.5, false, Ui.R(s.Done ? "Green" : "Muted"), 6));
+            return Ui.Card(sp);
+        }
+
         // ================= Settings
         FrameworkElement SettingsPage()
         {
@@ -635,16 +917,20 @@ namespace HallowHome
             if (Ha.InsecureRemote(c.S.HaUrl)) sp.Children.Add(Ui.Note("That address is plain http over the internet: the token would travel unencrypted. Use https (e.g. a Cloudflare Tunnel with Cloudflare Access in front) or your home network's address.", "Red", "RedBg"));
 
             sp.Children.Add(Section("Cameras"));
-            var live = Ui.Field(c.S.LiveBase ?? "", 360);
-            sp.Children.Add(KV("Live view address", live));
-            sp.Children.Add(KV("", Ui.Muted("Optional: docker-wyze-bridge's WebRTC (http://nas:8889) or HLS (http://nas:8888) address on your network. Keep it off the internet.", 11.5)));
+            var rtc = Ui.Field(c.S.BridgeWebRtc ?? "", 360); var hlsF = Ui.Field(c.S.BridgeHls ?? "", 360);
+            sp.Children.Add(KV("Bridge WebRTC", rtc)); sp.Children.Add(KV("Bridge HLS", hlsF));
+            sp.Children.Add(KV("", Ui.Muted("Optional: docker-wyze-bridge's players on your network - WebRTC http://nas:8889, HLS http://nas:8888. Keep them off the internet.", 11.5)));
             var rec = Ui.Field(c.S.RecordingsFolder ?? "", 360);
             sp.Children.Add(KV("Recordings folder", rec));
             sp.Children.Add(Wrap(Ui.Btn("Save", () =>
             {
-                var lv = live.Text.Trim(); c.S.LiveBase = lv.Length == 0 ? null : lv; c.S.RecordingsFolder = rec.Text.Trim().Length == 0 ? null : rec.Text.Trim(); c.S.Fix(); c.S.Save();
-                Say(lv.Length > 0 && c.S.LiveBase == null ? "The live view address should look like http://nas:8889." : "Saved."); BuildPage();
+                var a = rtc.Text.Trim(); var b = hlsF.Text.Trim(); c.S.BridgeWebRtc = a; c.S.BridgeHls = b; c.S.RecordingsFolder = rec.Text.Trim().Length == 0 ? null : rec.Text.Trim(); c.S.Fix(); c.S.Save(); c.ProbeBridge(() => BuildPage());
+                Say((a.Length > 0 && c.S.BridgeWebRtc == null) || (b.Length > 0 && c.S.BridgeHls == null) ? "A bridge address should look like http://nas:8889." : "Saved."); BuildPage();
             })));
+            var modes = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) }; modes.Children.Add(Ui.Muted("Picture source   ", 12.5));
+            foreach (var m in new[] { new[] { "auto", "Auto (what the bridge offers)" }, new[] { "webrtc", "WebRTC" }, new[] { "hls", "HLS" }, new[] { "mjpeg", "Home Assistant (MJPEG)" } }) { var mm = m[0]; modes.Children.Add(Chip(m[1], c.S.StreamMode == mm, () => { c.S.StreamMode = mm; c.S.Save(); BuildPage(); })); }
+            sp.Children.Add(modes);
+            sp.Children.Add(Ui.Muted("Auto: the grid uses Home Assistant's light MJPEG pictures; the big view and full screen use the bridge's WebRTC, else HLS, else MJPEG. Players always start muted. Now: " + SourceSummary() + ".", 11.5, 4));
 
             sp.Children.Add(Section("Pets"));
             var gpp = Ui.Field(Read.Num(c.S.GramsPerPortion), 70); var maxp = Ui.Field(c.S.MaxPortions.ToString(), 70);
@@ -654,6 +940,14 @@ namespace HallowHome
                 if (!double.TryParse(gpp.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out g) || g < 1 || g > 100 || !int.TryParse(maxp.Text.Trim(), out m) || m < 1 || m > 12) { Say("Grams 1-100, portions 1-12."); return; }
                 c.S.GramsPerPortion = g; c.S.MaxPortions = m; c.S.Save(); c.Recompute(); Say("Saved.");
             })));
+            var fe = Ui.Field(c.S.FilterEveryDays.ToString(), 60); var ce = Ui.Field(c.S.CleanEveryDays.ToString(), 60);
+            sp.Children.Add(Wrap(Ui.Muted("Fountain: change the filter every ", 12.5), fe, Ui.Muted(" days, clean it every ", 12.5), ce, Ui.Muted(" days  ", 12.5), Ui.Btn("Save", () =>
+            {
+                int a, b; if (!int.TryParse(fe.Text.Trim(), out a) || a < 1 || a > 180 || !int.TryParse(ce.Text.Trim(), out b) || b < 1 || b > 90) { Say("Filter 1-180 days, cleaning 1-90 days."); return; }
+                c.S.FilterEveryDays = a; c.S.CleanEveryDays = b; c.S.Save(); c.Recompute(); Say("Saved.");
+            })));
+            sp.Children.Add(Ui.Switch("Use my own intervals even when the fountain has its own filter / cleaning counters", c.S.OwnReminders, on => { c.S.OwnReminders = on; c.S.Save(); c.Recompute(); }));
+            sp.Children.Add(Ui.Muted("Without the integration's counters Hallow Home uses these intervals, counted from the day you press \"Changed the filter today\" / \"Cleaned it today\" on the Pets page.", 11.5, 4));
 
             sp.Children.Add(Section("Look"));
             var looks = new WrapPanel();

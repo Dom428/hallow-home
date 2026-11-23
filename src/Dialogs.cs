@@ -2,6 +2,8 @@
 // crash notice. Each is a Window built in code; --snap renders them without showing them.
 using System;
 using System.IO;
+using System.Linq;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -77,6 +79,54 @@ namespace HallowHome
             return w;
         }
         public static int AskFeed(Window owner, Controller c) { int r = 0; var w = FeedWindow(c, a => r = a); Own(w, owner); w.ShowDialog(); return r; }
+
+        // 1.2: a meal in the feeder's schedule - its time, portions and days (nothing is sent from here: the confirm comes next)
+        public static Window PlanWindow(Controller c, FeedPlan p, Action<PlanEdit> done)
+        {
+            var w = Make("Hallow Home", 480); var sp = Body(w);
+            sp.Children.Add(Ui.T(p == null ? "Add a meal" : "Change the " + p.Time + " meal", 15, true, null, 6));
+            sp.Children.Add(Ui.Muted("The feeder's own schedule, through the Petlibro integration. You'll see exactly what changes before anything is sent.", 12.5, 10));
+            var time = Ui.Field(p != null ? p.Time : "08:00", 80);
+            sp.Children.Add(Ui.Row(Ui.Muted("Time (24-hour)   ", 12.5), time));
+            int portions = p != null && p.Portions > 0 ? p.Portions : 1; var grams = Ui.Muted("", 12, 0);
+            var chips = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+            Action refresh = null;
+            for (int i = 1; i <= Math.Max(6, Math.Max(portions, c.S.MaxPortions)); i++)
+            {
+                var n = i; var t = new System.Windows.Controls.Primitives.ToggleButton { Content = i.ToString(), Tag = i, Style = Ui.S("Chip"), Margin = new Thickness(0, 0, 6, 6), MinWidth = 38 };
+                t.Click += (s, e) => { portions = n; refresh(); }; chips.Children.Add(t);
+            }
+            sp.Children.Add(Ui.Muted("Portions", 12, 0)); sp.Children.Add(chips); sp.Children.Add(grams);
+            var days = new HashSet<int>(p != null && p.Days.Length > 0 ? p.Days : new[] { 1, 2, 3, 4, 5, 6, 7 });
+            var dayChips = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+            for (int d = 1; d <= 7; d++)
+            {
+                var dd = d; var t = new System.Windows.Controls.Primitives.ToggleButton { Content = FeedPlan.DayNames[d - 1], Tag = d, Style = Ui.S("Chip"), Margin = new Thickness(0, 0, 6, 6), MinWidth = 46 };
+                t.Click += (s, e) => { if (days.Contains(dd)) days.Remove(dd); else days.Add(dd); refresh(); }; dayChips.Children.Add(t);
+            }
+            sp.Children.Add(Ui.Muted("Days", 12, 0)); sp.Children.Add(dayChips);
+            refresh = () =>
+            {
+                foreach (System.Windows.Controls.Primitives.ToggleButton t in chips.Children) t.IsChecked = (int)t.Tag == portions;
+                foreach (System.Windows.Controls.Primitives.ToggleButton t in dayChips.Children) t.IsChecked = days.Contains((int)t.Tag);
+                grams.Text = portions + " portion" + (portions == 1 ? "" : "s") + " ≈ " + Read.Num(portions * c.S.GramsPerPortion) + " g";
+            };
+            refresh();
+            var err = Ui.Muted("", 12, 0); sp.Children.Add(err);
+            var row = Buttons(sp); PlanEdit answer = null;
+            row.Children.Add(Ui.Btn("Cancel", () => w.Close()));
+            var ok = Ui.Btn("Next", () =>
+            {
+                var e = new PlanEdit { Kind = p == null ? "add" : "edit", PlanId = p != null ? p.Id : 0, Time = ScheduleView.NormTime(time.Text) ?? time.Text.Trim(), Portions = portions, Days = days.OrderBy(x => x).ToArray() };
+                if (e.Days.Length == 0) { err.Text = "Pick at least one day."; return; }
+                var why = Schedule.Check(e, c.Feeder.Schedule, 48); if (why != null) { err.Text = why; return; }
+                answer = e; w.Close();
+            }, true);
+            ok.Margin = new Thickness(0); ok.MinWidth = 90; row.Children.Add(ok);
+            w.Closed += (s, e) => { if (done != null) done(answer); };
+            return w;
+        }
+        public static PlanEdit AskPlan(Window owner, Controller c, FeedPlan p) { PlanEdit r = null; var w = PlanWindow(c, p, a => r = a); Own(w, owner); w.ShowDialog(); return r; }
     }
 
     public static class CrashNotice

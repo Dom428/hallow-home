@@ -1,6 +1,6 @@
 # Setting up Home Assistant on the NAS (for Hallow Home)
 
-Hallow Home is only the PC app. Your devices live in **Home Assistant (HA)**, which runs in Docker on your NAS. Hallow Home does
+Hallow Home is only the PC app (its **Setup** page walks through this page step by step and makes the docker-wyze-bridge snippet for you). Your devices live in **Home Assistant (HA)**, which runs in Docker on your NAS. Hallow Home does
 **not** install or change anything on the NAS. This page shows what to set up yourself, once.
 
 What you end up with:
@@ -104,7 +104,9 @@ Wyze requires them for third-party tools since 2024. Start it with `docker compo
 
 ## 6. Petlibro (feeder and fountain)
 
-HACS > search **Petlibro** > Download > restart > Add integration **PETLIBRO** and sign in with your Petlibro account
+HACS > the three dots > **Custom repositories** > `https://github.com/jjjonesjr33/petlibro`, type Integration > Add; then
+search **PETLIBRO** > Download (the newest version also has feeding-schedule services) > restart > Add integration **PETLIBRO**
+and sign in with your Petlibro account
 **yourself** (Hallow Home never sees it). Read the integration's README first: Petlibro may allow only one signed-in session per
 account, so some people make a second Petlibro account, share the devices to it from the main app, and use that one in HA.
 
@@ -115,7 +117,7 @@ Names differ between versions - that's fine, Hallow Home's Devices page shows wh
 ## 7. A token for Hallow Home
 
 In Home Assistant: click your name (bottom left) > **Security** > **Long-lived access tokens** > **Create token**, name it
-"Hallow Home", and copy it (it's shown once). In Hallow Home: Settings > paste `http://<nas>:8123` and the token > Save.
+"Hallow Home", and copy it (it's shown once). In Hallow Home: the **Setup** page (step 1) > paste `http://<nas>:8123`, Test connection, paste the token, Test again.
 The token is stored encrypted for your Windows user (DPAPI) and never logged. Revoke it in HA any time.
 
 ## 8. Optional: reaching it from outside (home.hallowservices.com)

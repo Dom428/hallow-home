@@ -19,10 +19,11 @@ using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using FakeHa = HallowHome.DemoHa;   // 1.2: the stand-in Home Assistant moved into the app (Demo mode uses it too)
 
 namespace HallowHome.Tests
 {
-    public static class Run
+    public static partial class Run
     {
         static int pass, fail;
         static void Ok(bool c, string name) { if (c) { pass++; Console.WriteLine("ok   " + name); } else { fail++; Console.WriteLine("FAIL " + name); } }
@@ -43,7 +44,8 @@ namespace HallowHome.Tests
             try
             {
                 Parsing(); PortionTests(); MappingTests(); Overrides(); Readers(); JamTests(); RuleTests(); IntakeTests(); DeskTests(); AutomationTests(); SecretTests(); LockTests(); MjpegTests(); ModeTests(); Misc();
-                using (var ha = new FakeHa()) { ClientTests(ha); SenderTests(); GridTest(app, ha); LiveViewTest(app, ha); PipeAndApp(ha); }
+                SettingsMigration(); ComposeTests(); ScheduleUnitTests(); ReminderTests(); StreamUnitTests(); PercentTexts();
+                using (var ha = new FakeHa()) { ClientTests(ha); SenderTests(); WizardTests(ha); GridTest(app, ha); CameraTests(app, ha); ScheduleTests(app, ha); PlayerTests(app, ha); DemoModeTests(app); PipeAndApp(ha); }
             }
             catch (Exception e) { fail++; Console.WriteLine("FAIL exception: " + e); }
             try { if (Directory.Exists(Dir)) Directory.Delete(Dir, true); } catch { }
@@ -97,7 +99,7 @@ namespace HallowHome.Tests
         {
             var s = NewSettings(); var m = Roles.Build(FakeData.Entities(DateTime.Now), s);
             var want = new Dictionary<string, string> {
-                { "feeder.feed", "button.granary_smart_camera_feeder_manual_feed" }, { "feeder.portion", "number.granary_smart_camera_feeder_manual_feed_quantity" },
+                { "feeder.schedule", "binary_sensor.granary_smart_camera_feeder_feeding_schedule" }, { "feeder.feed", "button.granary_smart_camera_feeder_manual_feed" }, { "feeder.portion", "number.granary_smart_camera_feeder_manual_feed_quantity" },
                 { "feeder.next", "sensor.granary_smart_camera_feeder_next_feeding_time" }, { "feeder.last", "sensor.granary_smart_camera_feeder_last_feed_time" },
                 { "feeder.grams", "sensor.granary_smart_camera_feeder_today_feeding_quantity" }, { "feeder.meals", "sensor.granary_smart_camera_feeder_today_feeding_times" },
                 { "feeder.jam", "binary_sensor.granary_smart_camera_feeder_dispenser_problem" }, { "feeder.food", "binary_sensor.granary_smart_camera_feeder_food_low" },
@@ -382,7 +384,7 @@ namespace HallowHome.Tests
             try { bad.Check(); Ok(false, "a wrong token is refused"); } catch (HaException e) { Ok(e.Status == 401 && e.Message.Contains("refused the token") && !e.Message.Contains("wrong-token"), "a wrong token: \"refused the token\" (and the message never contains it)"); }
             try { new Ha("http://localhost:1", ha.Token).Check(); Ok(false, "nothing there"); } catch (HaException e) { Ok(!e.Message.Contains(ha.Token), "nothing listening: " + e.Message); }
             var h = new Ha(ha.Url, ha.Token);
-            Ok(h.Check() == null && h.Version() == "2026.11.0-fake", "GET /api/ and /api/config");
+            Ok(h.Check() == null && h.Version() == "2026.11.0-demo", "GET /api/ and /api/config");
             var states = h.States(); Ok(states.Count == FakeData.States(DateTime.Now).Count, "GET /api/states: " + states.Count + " entities");
             h.Call("switch", "turn_on", new Dictionary<string, object> { { "entity_id", "switch.granary_smart_camera_feeder_sound" } });
             Ok(ha.State("switch.granary_smart_camera_feeder_sound") == "on" && ha.Calls.Last().StartsWith("switch.turn_on {\"entity_id\":\"switch.granary_smart_camera_feeder_sound\"}"), "POST /api/services/switch/turn_on");
@@ -446,7 +448,7 @@ namespace HallowHome.Tests
         {
             Mode.IsLight = false; app.Resources.MergedDictionaries.Clear();
             app.Resources.MergedDictionaries.Add((ResourceDictionary)XamlReader.Parse(Program.ThemeXaml(false, Accent.Default).Replace("assembly=HallowHome", "assembly=" + typeof(Run).Assembly.GetName().Name)));
-            var st = HomeSettings.Load(); st.HaUrl = ha.Url; st.Save(); SecretStore.Set(SecretStore.Token, ha.Token);
+            var st = HomeSettings.Load(); st.HaUrl = ha.Url; st.GridSize = 3; st.Save(); SecretStore.Set(SecretStore.Token, ha.Token);   // 3x3: all five cameras on one page
             var c = new Controller(true);
             Ok(PumpUntil(() => c.Connected && c.Entities.Count > 20, 10000), "the app connects to the fake Home Assistant (" + c.Entities.Count + " entities)");
             Ok(c.Map.Cameras.Count == 5 && c.Feeder.CanFeed && c.Lock.Kind == "ha-unavailable", "cameras, the feeder's Feed now, the lock's honest state");
@@ -461,23 +463,6 @@ namespace HallowHome.Tests
             w.Show("dashboard"); w.Close();
             c.Detach();
         }
-        // docker-wyze-bridge's player page in the WebView2 live view (one window far off-screen)
-        static void LiveViewTest(Application app, FakeHa ha)
-        {
-            if (CameraWindow.RuntimeVersion() == null) { Console.WriteLine("     (WebView2 runtime not installed - live view check skipped)"); return; }
-            var w = new CameraWindow("Front Door", ha.Url + "/bridge/front-door/") { WindowStartupLocation = WindowStartupLocation.Manual, Left = -32000, Top = -32000, ShowActivated = false, ShowInTaskbar = false };
-            bool? ok = null; w.Loaded2 += r => ok = r;
-            w.Show();
-            PumpUntil(() => ok != null, 20000);
-            string title = null;
-            if (ok == true) PumpUntil(() => { try { title = w.View.CoreWebView2.DocumentTitle; } catch { } return title == "playing"; }, 10000);
-            Ok(ok == true && title == "playing", "live view: the bridge's player page loads in WebView2 and its video starts (title \"" + title + "\")");
-            w.Close(); Pump(300);
-            var wv = Path.GetDirectoryName(CameraWindow.DataFolder);   // %LOCALAPPDATA%HallowHomeTest: WebView2 lets go of it a moment after the window closes
-            for (int i = 0; i < 20 && Directory.Exists(wv); i++) { try { Directory.Delete(wv, true); } catch { Thread.Sleep(250); } }
-            Ok(!Directory.Exists(wv), "the test WebView2 folder is cleaned up");
-        }
-
         // ---------------- the family pipe of a test copy, talking to the fake Home Assistant
         static string Cmd(string exe, string dir, string line)
         {
